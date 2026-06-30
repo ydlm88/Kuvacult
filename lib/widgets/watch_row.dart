@@ -1,3 +1,4 @@
+// watch_row.dart — List-row widget showing a movie's poster, metadata, streaming badge, and social signals.
 import 'package:flutter/material.dart';
 import '../models.dart';
 import '../theme.dart';

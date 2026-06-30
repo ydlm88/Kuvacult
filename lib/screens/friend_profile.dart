@@ -1,7 +1,7 @@
+// friend_profile.dart — Thin wrapper that resolves a friend by userId into the shared UserProfileScreen.
 import 'package:flutter/material.dart';
 import 'user_profile.dart';
 
-// Thin alias so existing push calls in friends.dart / profile.dart need no changes.
 class FriendProfileScreen extends StatelessWidget {
   final String userId;
   final String initialName;

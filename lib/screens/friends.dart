@@ -1,3 +1,4 @@
+// friends.dart — Friend search, pending requests, and friends-list screen.
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme.dart';
@@ -45,7 +46,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
 
-    // Guests see a sign-in prompt — the entire friends feature requires an account
     if (state.isGuest) {
       return Scaffold(
         backgroundColor: MC.bg0,
@@ -111,12 +111,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
     final currentUserId = state.currentUser?.id ?? 'guest';
 
-    // Incoming pending requests (others sent to me, not yet accepted)
     final pending = state.friendRequests
         .where((r) => r.toId == currentUserId && !r.accepted)
         .toList();
 
-    // IDs I've already sent a request to (outgoing, not yet accepted)
     final sentToIds = state.friendRequests
         .where((r) => r.fromId == currentUserId && !r.accepted)
         .map((r) => r.toId)
@@ -130,7 +128,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
       body: SafeArea(
         child: CustomScrollView(
           slivers: [
-            // ── Header ──────────────────────────────────────────────────────
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
@@ -148,7 +145,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
               ),
             ),
 
-            // ── Search bar ───────────────────────────────────────────────────
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -195,7 +191,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
               ),
             ),
 
-            // ── User search results ──────────────────────────────────────────
             if (isSearching) ...[
               if (_searching)
                 const SliverToBoxAdapter(
@@ -255,7 +250,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
                 ),
               ],
             ] else ...[
-              // ── Pending incoming requests ──────────────────────────────────
               if (pending.isNotEmpty) ...[
                 SliverToBoxAdapter(
                   child: Padding(
@@ -268,10 +262,12 @@ class _FriendsScreenState extends State<FriendsScreen> {
                   delegate: SliverChildBuilderDelegate(
                     (ctx, i) {
                       final req = pending[i];
-                      // Show the sender's ID as display name until backend resolves it
                       return _PendingRow(
-                        fromId: req.fromId,
-                        onAccept: () => state.acceptFriendRequest(req.id),
+                        fromId:          req.fromId,
+                        fromUsername:    req.fromUsername,
+                        fromDisplayName: req.fromDisplayName,
+                        fromAvatarUrl:   req.fromAvatarUrl,
+                        onAccept:  () => state.acceptFriendRequest(req.id),
                         onDecline: () => state.declineFriendRequest(req.id),
                       );
                     },
@@ -281,7 +277,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
                 const SliverToBoxAdapter(child: SizedBox(height: 24)),
               ],
 
-              // ── Friends list ───────────────────────────────────────────────
               if (friendIds.isNotEmpty) ...[
                 SliverToBoxAdapter(
                   child: Padding(
@@ -296,7 +291,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
                   ),
                 ),
               ] else if (pending.isEmpty) ...[
-                // ── Empty state ────────────────────────────────────────────
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(20, 40, 20, 0),
@@ -389,7 +383,7 @@ class _FriendRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Use cached friend profile — populated by _loadFriends() after login
+    // Use cached friend profile — populated by _loadFriends() after login.
     final friends = context.read<AppState>().friends;
     UserAccount? friend;
     try {
@@ -438,19 +432,27 @@ class _FriendRow extends StatelessWidget {
 
 class _PendingRow extends StatelessWidget {
   final String fromId;
+  final String? fromUsername;
+  final String? fromDisplayName;
+  final String? fromAvatarUrl;
   final VoidCallback onAccept;
   final VoidCallback onDecline;
 
   const _PendingRow({
     required this.fromId,
+    this.fromUsername,
+    this.fromDisplayName,
+    this.fromAvatarUrl,
     required this.onAccept,
     required this.onDecline,
   });
 
   @override
   Widget build(BuildContext context) {
-    // Strip "auth0|" prefix for a cleaner placeholder until the profile loads
-    final cleanId = fromId.contains('|') ? fromId.split('|').last : fromId;
+    final displayName = fromDisplayName?.isNotEmpty == true
+        ? fromDisplayName!
+        : (fromUsername?.isNotEmpty == true ? fromUsername! : fromId);
+    final handle = fromUsername?.isNotEmpty == true ? '@$fromUsername' : 'Wants to be friends';
 
     return GestureDetector(
       onTap: () => Navigator.push(context,
@@ -468,13 +470,13 @@ class _PendingRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(cleanId,
+                  Text(displayName,
                       style: const TextStyle(
                           color: MC.ink,
                           fontSize: 14,
                           fontWeight: FontWeight.w600)),
-                  const Text('Wants to be friends',
-                      style: TextStyle(color: MC.mute, fontSize: 12)),
+                  Text(handle,
+                      style: const TextStyle(color: MC.mute, fontSize: 12)),
                 ],
               ),
             ),

@@ -1,3 +1,4 @@
+// section_header.dart — Displays a section title with an optional zero-padded count and a trailing action widget.
 import 'package:flutter/material.dart';
 import '../theme.dart';
 

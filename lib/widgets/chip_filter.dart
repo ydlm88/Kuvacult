@@ -1,3 +1,4 @@
+// chip_filter.dart — Horizontally scrollable row of filter chips where only one item is active at a time.
 import 'package:flutter/material.dart';
 import '../theme.dart';
 

@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Marquee</string>
+	<string>Kuvacult</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>marquee</string>
+	<string>kuvacult</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -69,13 +69,13 @@
 
 	<!-- image_picker: required to access the photo library and camera -->
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Marquee needs access to your photo library to set your profile picture.</string>
+	<string>Kuvacult needs access to your photo library to set your profile picture.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Marquee needs camera access to take a profile picture.</string>
+	<string>Kuvacult needs camera access to take a profile picture.</string>
 
 	<!-- Auth0 callback URL scheme — must match the scheme in AuthService (_kScheme) -->
 	<!-- Auth0 Dashboard → Applications → [App] → Allowed Callback URLs:          -->
-	<!-- com.example.marquee://dev-wdn5ybqovbac1hkc.us.auth0.com/ios/com.example.marquee/callback -->
+	<!-- com.example.kuvacult://dev-wdn5ybqovbac1hkc.us.auth0.com/ios/com.example.kuvacult/callback -->
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -85,7 +85,7 @@
 			<string>auth0</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>com.example.marquee</string>
+				<string>com.example.kuvacult</string>
 			</array>
 		</dict>
 	</array>

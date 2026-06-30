@@ -1,3 +1,4 @@
+// app_state.dart — Central ChangeNotifier that owns all runtime state for the app, including the user session, watchlists, movies, reviews, friends, notifications, and community data.
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
@@ -8,11 +9,7 @@ import 'services/api_service.dart';
 import 'services/wl_service.dart';
 import 'services/user_notification_service.dart';
 
-class AppState extends ChangeNotifier {
-  // ─── Auth state ────────────────────────────────────────────────────────────────
-  // _authService handles all Auth0 token operations.
-  // TODO(backend): After Auth0 login, exchange the id_token for a backend JWT at
-  // POST /auth/verify — your server validates the Auth0 token and returns a session.
+class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final _authService = AuthService();
   bool _isLoggedIn = false;
   bool _isGuest = false;
@@ -22,12 +19,10 @@ class AppState extends ChangeNotifier {
   bool get isGuest => _isGuest;
   UserAccount? get currentUser => _currentUser;
 
-  // ─── Watchlist state ───────────────────────────────────────────────────────────
-  // TODO(backend): On init load watchlists from your API:
-  // GET /watchlists — returns all watchlists the current user belongs to
-  // Subscribe to a WebSocket channel per watchlist for live collaborative updates.
   final _wlService = WatchlistService();
   StreamSubscription? _wlSub;
+
+  Timer? _tokenRefreshTimer;
 
   final _notifService = UserNotificationService();
   StreamSubscription<Map<String, dynamic>>? _notifSub;
@@ -48,25 +43,25 @@ class AppState extends ChangeNotifier {
           orElse: () => _watchlists.first,
         );
 
-  // Convenience getters kept for screens that read state.watchlist / state.allMovies
+  // Convenience getters kept for screens that read state.watchlist/state.allMovies
   Watchlist get watchlist =>
       activeWatchlist ?? Watchlist(id: '', name: '', listKey: '');
   List<Movie> get allMovies => activeWatchlist?.movies ?? const [];
 
+  //Checker
+  bool isInAnyQueue(String movieId) =>
+      _watchlists.any((wl) => wl.movies.any((m) => m.id == movieId));
+
   SortOrder get sortOrder => _sortOrder;
   String? get genreFilter => _genreFilter;
 
-  // ─── Search state ──────────────────────────────────────────────────────────────
-  // TODO(backend): Replace direct IMDb API calls with your own search endpoint:
-  // GET /search/movies?q=<query>&pageToken=<token> — proxies IMDb and caches results
   String _searchQuery = '';
   String get searchQuery => _searchQuery;
 
-  // Raw results from the current API fetch — may contain more than 15 items.
   List<Movie> _searchRawResults = [];
   bool _searchLoading = false;
   bool get searchLoading => _searchLoading;
-  // Incremented on every new fetch; stale responses check against this and bail.
+  // Incremented on every new fetch; stale responses check against this
   int _searchGeneration = 0;
 
   // Session-scoped cache for first-page search results.
@@ -78,17 +73,16 @@ class AppState extends ChangeNotifier {
 
   // Which 15-item slice of _searchRawResults to display.
   int _localPage = 0;
-  // User-visible page counter (increments across both local and API pages).
+  // User-visible page counter 
   int _displayPage = 1;
 
   static const int _pageSize = 15;
 
-  // Returns at most 15 results from the current API fetch.
+  // Returns at most 15 results from the current API fetch
   List<Movie> get searchResults =>
       _searchRawResults.skip(_localPage * _pageSize).take(_pageSize).toList();
 
   // Page history stack: each entry is the pageToken used to fetch that page.
-  // Null = first page (no token needed). Popping lets us go back a page.
   final List<String?> _searchPageHistory = [null];
   String? _searchNextPageToken;
 
@@ -99,16 +93,15 @@ class AppState extends ChangeNotifier {
       _localPage > 0 || _searchPageHistory.length > 1;
   int get searchPageNumber => _displayPage;
 
-  // ─── Trending state ────────────────────────────────────────────────────────────
-  // TODO(backend): Replace with GET /movies/trending — server-curated list
   List<Movie> _trendingMovies = [];
   bool _trendingLoaded = false;
   bool _trendingLoading = false;
+  DateTime? _trendingLoadedAt;
+  static const _kTrendingTtl = Duration(hours: 4);
   List<Movie> get trendingMovies => _trendingMovies;
   bool get trendingLoaded => _trendingLoaded;
   bool get trendingLoading => _trendingLoading;
 
-  // ─── Genre search state ────────────────────────────────────────────────────────
   String? _selectedGenre;
   List<Movie> _genreResults = [];
   bool _genreLoading = false;
@@ -116,14 +109,9 @@ class AppState extends ChangeNotifier {
   List<Movie> get genreResults => List.unmodifiable(_genreResults);
   bool get genreLoading => _genreLoading;
 
-  // ─── Activity feed ─────────────────────────────────────────────────────────────
-  // TODO(backend): Fetch activity from your API:
-  // GET /watchlists/:id/activity?page=1 — paginated activity log
-  // Push new events via WebSocket so all members see updates in real time.
   final List<ActivityEvent> _activity = [];
   List<ActivityEvent> get activity => List.unmodifiable(_activity);
 
-  // ─── Social graph ──────────────────────────────────────────────────────────────
   final Set<String> _followingIds = {};
   int _myFollowerCount = 0;
   Set<String> get followingIds => Set.unmodifiable(_followingIds);
@@ -131,10 +119,12 @@ class AppState extends ChangeNotifier {
   int get myFollowerCount => _myFollowerCount;
   int get myFollowingCount => _followingIds.length;
 
-  // ─── Public reviews ────────────────────────────────────────────────────────────
-  // TODO(backend): Load from GET /reviews and cache locally.
   final List<Review> _reviews = [];
   bool _reviewsLoading = false;
+  DateTime? _publicReviewsLoadedAt;
+  final Map<String, DateTime> _userReviewsLoadedAt = {};
+  final Map<String, DateTime> _userWatchedLoadedAt = {};
+  static const _kCacheTtl = Duration(minutes: 5);
   List<Review> get publicReviews => List.unmodifiable(_reviews);
   bool get reviewsLoading => _reviewsLoading;
 
@@ -144,44 +134,123 @@ class AppState extends ChangeNotifier {
   List<Review> reviewsForUser(String userId) =>
       _reviews.where((r) => r.byId == userId).toList();
 
-  double marqueeScore(String movieId) {
+  double kuvacultScore(String movieId) {
     final rs = reviewsForMovie(movieId);
     if (rs.isEmpty) return 0.0;
-    return rs.map((r) => r.stars).reduce((a, b) => a + b) / rs.length;
+    return (rs.map((r) => r.stars).reduce((a, b) => a + b) / rs.length) * 2;
   }
 
-  Future<void> loadPublicReviews() async {
+  Future<void> loadPublicReviews({bool force = false}) async {
     if (_reviewsLoading) return;
+    if (!force &&
+        _publicReviewsLoadedAt != null &&
+        DateTime.now().difference(_publicReviewsLoadedAt!) < _kCacheTtl &&
+        _reviews.isNotEmpty) return;
     _reviewsLoading = true;
     notifyListeners();
     try {
       final data = await ApiService.fetchPublicReviews();
       final fresh = data.map(_reviewFromJson).toList();
-      _reviews.clear();
-      _reviews.addAll(fresh);
+      _publicReviewsLoadedAt = DateTime.now();
+      // Upsert
+      for (final r in fresh) {
+        final idx = _reviews.indexWhere((e) => e.id == r.id);
+        if (idx != -1) {
+          _reviews[idx] = r;
+        } else {
+          _reviews.add(r);
+        }
+      }
+      _prefetchMissingAvatars(fresh);
     } catch (_) {
-      // non-critical; keep existing cached reviews
+      // keep existing cached reviews
     } finally {
       _reviewsLoading = false;
       notifyListeners();
     }
   }
 
+  void _prefetchMissingAvatars(List<Review> reviews) {
+    final ids = reviews
+        .where((r) =>
+            (r.byAvatarUrl ?? '').isEmpty &&
+            r.byId != (_currentUser?.id ?? '') &&
+            !_memberProfiles.containsKey(r.byId))
+        .map((r) => r.byId)
+        .toSet();
+    for (final id in ids) {
+      ApiService.fetchUser(id).then((data) {
+        final url = data['avatarUrl'] as String?;
+        if (url != null && url.isNotEmpty) {
+          cacheMemberProfile(
+            id,
+            data['displayName'] as String? ?? '',
+            data['username'] as String? ?? '',
+            url,
+          );
+        }
+      }).catchError((_) {});
+    }
+  }
+
   Future<List<Review>> loadUserReviews(String userId) async {
+    final lastLoad = _userReviewsLoadedAt[userId];
+    if (lastLoad != null &&
+        DateTime.now().difference(lastLoad) < _kCacheTtl) {
+      return reviewsForUser(userId);
+    }
     try {
       final data = await ApiService.fetchUserReviews(userId);
-      return data.map(_reviewFromJson).toList();
+      final fetched = data.map(_reviewFromJson).toList();
+      // Upsert
+      for (final r in fetched) {
+        final idx = _reviews.indexWhere((e) => e.id == r.id);
+        if (idx != -1) {
+          _reviews[idx] = r;
+        } else {
+          _reviews.add(r);
+        }
+      }
+      _userReviewsLoadedAt[userId] = DateTime.now();
+      notifyListeners();
+      return fetched;
     } catch (_) {
-      return [];
+      return reviewsForUser(userId);
     }
   }
 
   Future<List<Review>> loadMovieReviews(String movieId) async {
     try {
       final data = await ApiService.fetchMovieReviews(movieId);
-      return data.map(_reviewFromJson).toList();
+      final fetched = data.map(_reviewFromJson).toList();
+      for (final r in fetched) {
+        final idx = _reviews.indexWhere((e) => e.id == r.id);
+        if (idx != -1) {
+          _reviews[idx] = r;
+        } else {
+          _reviews.add(r);
+        }
+      }
+      notifyListeners();
+      return fetched;
     } catch (_) {
-      return [];
+      return reviewsForMovie(movieId);
+    }
+  }
+
+  void incrementReviewCommentCount(String reviewId) {
+    final idx = _reviews.indexWhere((r) => r.id == reviewId);
+    if (idx != -1) {
+      _reviews[idx].commentCount++;
+      notifyListeners();
+    }
+  }
+
+  void decrementReviewCommentCount(String reviewId) {
+    final idx = _reviews.indexWhere((r) => r.id == reviewId);
+    if (idx != -1) {
+      _reviews[idx].commentCount = (_reviews[idx].commentCount - 1).clamp(0, 9999);
+      notifyListeners();
     }
   }
 
@@ -196,61 +265,184 @@ class AppState extends ChangeNotifier {
     bool rewatch = false,
   }) async {
     if (_currentUser == null) return null;
+    final data = await ApiService.submitReview(
+      byId: _currentUser!.id,
+      movieId: movieId,
+      movieTitle: movieTitle,
+      movieYear: movieYear,
+      movieDirector: movieDirector,
+      moviePosterUrl: moviePosterUrl,
+      stars: stars,
+      text: text,
+      rewatch: rewatch,
+    );
+    final review = _reviewFromJson(data);
+    _reviews.insert(0, review);
+    notifyListeners();
+    return review;
+  }
+
+  Future<void> deleteReview(String reviewId) async {
+    final idx = _reviews.indexWhere((r) => r.id == reviewId);
+    Review? removed;
+    if (idx != -1) {
+      removed = _reviews.removeAt(idx);
+      notifyListeners();
+    }
     try {
-      final data = await ApiService.submitReview(
-        byId: _currentUser!.id,
-        movieId: movieId,
-        movieTitle: movieTitle,
-        movieYear: movieYear,
-        movieDirector: movieDirector,
-        moviePosterUrl: moviePosterUrl,
-        stars: stars,
-        text: text,
-        rewatch: rewatch,
-      );
-      final review = _reviewFromJson(data);
-      _reviews.insert(0, review);
-      notifyListeners();
-      return review;
+      await ApiService.deleteReview(reviewId);
     } catch (_) {
-      // Optimistic local insert so UI feels responsive even when backend is down
-      final review = Review(
-        id: 'local_${DateTime.now().millisecondsSinceEpoch}',
-        byId: _currentUser!.id,
-        byName: _currentUser!.displayName,
-        byHandle: _currentUser!.username,
-        byAvatarColor: _currentUser!.avatarBg,
-        byAvatarUrl: _currentUser!.avatarUrl,
-        movieId: movieId,
-        movieTitle: movieTitle,
-        movieYear: movieYear,
-        moviePosterUrl: moviePosterUrl,
-        movieDirector: movieDirector,
-        stars: stars,
-        text: text,
-        at: DateTime.now(),
-        rewatch: rewatch,
-      );
-      _reviews.insert(0, review);
-      notifyListeners();
-      return review;
+      if (removed != null) {
+        _reviews.insert(idx, removed);
+        notifyListeners();
+      }
     }
   }
 
   void likeReview(String reviewId) async {
+    if (_currentUser == null) return;
     final idx = _reviews.indexWhere((r) => r.id == reviewId);
     if (idx == -1) return;
     final review = _reviews[idx];
-    review.likedByMe = !review.likedByMe;
+    final wasLiked = review.likedByMe;
+    review.likedByMe = !wasLiked;
     review.likes += review.likedByMe ? 1 : -1;
     notifyListeners();
     try {
-      await ApiService.likeReview(reviewId);
-    } catch (_) {
-      // revert on failure
-      review.likedByMe = !review.likedByMe;
-      review.likes += review.likedByMe ? 1 : -1;
+      final data = await ApiService.likeReview(reviewId, _currentUser!.id);
+      final serverLikes = (data['likes'] as num?)?.toInt();
+      if (serverLikes != null) review.likes = serverLikes;
+      final likedBy = data['likedBy'];
+      if (likedBy is List) review.likedByMe = likedBy.contains(_currentUser?.id);
       notifyListeners();
+    } catch (_) {
+      review.likedByMe = wasLiked;
+      review.likes += wasLiked ? 1 : -1;
+      notifyListeners();
+    }
+  }
+
+  Future<void> markMovieWatched(Movie movie) async {
+    if (_currentUser == null) return;
+    // Update global watch history optimistically
+    if (!_myWatchedMovies.any((m) => m.id == movie.id)) {
+      _myWatchedMovies.add(WatchedMovie(
+        id: movie.id,
+        posterUrl: movie.poster.imageUrl,
+        title: movie.title,
+        year: movie.year,
+      ));
+      notifyListeners();
+    }
+    ApiService.markMovieWatched(
+      _currentUser!.id,
+      movieId: movie.id,
+      posterUrl: movie.poster.imageUrl,
+      title: movie.title,
+      year: movie.year,
+    );
+    // Tell the watchlist backend this member watched 
+    final wlId = activeWatchlist?.id;
+    if (wlId != null && findMovie(movie.id) != null) {
+      await ApiService.patchMovie(
+        watchlistId: wlId,
+        movieId: movie.id,
+        section: 'watched',
+        memberId: _currentUser!.id,
+      );
+    }
+  }
+
+  Future<void> unmarkMovieWatched(String movieId) async {
+    if (_currentUser == null) return;
+    _myWatchedMovies.removeWhere((m) => m.id == movieId);
+    notifyListeners();
+    ApiService.unmarkMovieWatched(_currentUser!.id, movieId);
+    final live = findMovie(movieId);
+    final wlId = activeWatchlist?.id;
+    if (live != null && wlId != null) {
+      final targetSection = live.section == WatchSection.watched
+          ? WatchSection.want
+          : live.section;
+      if (live.section == WatchSection.watched) {
+        live.section = WatchSection.want;
+        live.watchedBy.remove(_currentUser!.id);
+        notifyListeners();
+      }
+      // Tell backend to clear this member's watched_by entry
+      await ApiService.patchMovie(
+        watchlistId: wlId,
+        movieId: movieId,
+        section: targetSection.name,
+        memberId: _currentUser!.id,
+      );
+    }
+  }
+
+  Future<List<WatchedMovie>> loadUserWatchedMovies(String userId) async {
+    final lastLoad = _userWatchedLoadedAt[userId];
+    if (lastLoad != null &&
+        DateTime.now().difference(lastLoad) < _kCacheTtl) {
+      return userId == _currentUser?.id
+          ? List.unmodifiable(_myWatchedMovies)
+          : (_profileWatchedCache[userId] ?? []);
+    }
+    try {
+      final data = await ApiService.fetchWatchedMovies(userId);
+      final items = data
+          .map((d) => WatchedMovie(
+                id: d['movieId'] as String? ?? '',
+                posterUrl: d['posterUrl'] as String?,
+                title: d['title'] as String? ?? '',
+                year: (d['year'] as num?)?.toInt() ?? 0,
+              ))
+          .where((m) => m.id.isNotEmpty)
+          .toList()
+          .reversed
+          .toList();
+      if (userId == _currentUser?.id) {
+        _myWatchedMovies
+          ..clear()
+          ..addAll(items);
+      } else {
+        _profileWatchedCache[userId] = items;
+      }
+      _userWatchedLoadedAt[userId] = DateTime.now();
+      notifyListeners();
+      return items;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> _loadMyWatchedMovies() async {
+    if (_currentUser == null) return;
+    await loadUserWatchedMovies(_currentUser!.id);
+    _syncWatchedSections();
+  }
+
+  // Tells the backend which movies this member has watched so watched_by is
+  // current. The server promotes the movie to 'watched' section only once ALL
+  // members have watched it and broadcasts movie_updated; local sections stay
+  // as fetched from the DB via _loadWatchlists() to avoid transient wrong state.
+  void _syncWatchedSections() {
+    final userId = _currentUser?.id;
+    if (userId == null) return;
+    for (final wl in _watchlists) {
+      for (final movie in wl.movies) {
+        // Only sync if the backend doesn't already have this user in watchedBy —
+        // avoids creating spurious 'moved to watched' activity events on every startup.
+        if (movie.section != WatchSection.watched &&
+            isWatched(movie.id) &&
+            !movie.watchedBy.contains(userId)) {
+          ApiService.patchMovie(
+            watchlistId: wl.id,
+            movieId: movie.id,
+            section: 'watched',
+            memberId: userId,
+          ).catchError((_) {});
+        }
+      }
     }
   }
 
@@ -272,25 +464,60 @@ class AppState extends ChangeNotifier {
         likes: (d['likes'] as num?)?.toInt() ?? 0,
         commentCount: (d['commentCount'] as num?)?.toInt() ?? 0,
         rewatch: d['rewatch'] as bool? ?? false,
-        likedByMe: d['likedByMe'] as bool? ?? false,
+        likedByMe: (d['likedBy'] is List
+                       ? (d['likedBy'] as List).contains(_currentUser?.id)
+                       : false)
+                   || (d['likedByMe'] as bool? ?? false),
       );
 
-  // ─── Veto invite ───────────────────────────────────────────────────────────────
   VetoInvite? _pendingVetoInvite;
   VetoInvite? get pendingVetoInvite => _pendingVetoInvite;
+
+  // Set when user taps "Join" on the banner — VetoScreen reads this to
+  // auto-connect and send veto_join for the right watchlist.
+  String? _pendingVetoJoin;
+  String? get pendingVetoJoin => _pendingVetoJoin;
+
+  void acceptVetoInvite() {
+    _pendingVetoJoin = _pendingVetoInvite?.watchlistId;
+    _pendingVetoInvite = null;
+    notifyListeners();
+  }
+
+  void clearPendingVetoJoin() {
+    _pendingVetoJoin = null;
+    // No notifyListeners — VetoScreen clears this internally to avoid a rebuild loop.
+  }
 
   void dismissVetoInvite() {
     _pendingVetoInvite = null;
     notifyListeners();
   }
 
-  // ─── Friends state ─────────────────────────────────────────────────────────────
-  // TODO(backend): Endpoints for friends:
-  // GET /users/:id/friends, POST /friends/request, PATCH /friends/:id/accept
+  final List<WatchlistInvite> _pendingInvites = [];
+  List<WatchlistInvite> get pendingInvites => List.unmodifiable(_pendingInvites);
+
+  final List<AppNotification> _notifications = [];
+  List<AppNotification> get notifications => List.unmodifiable(_notifications);
+
+  int get unreadNotifCount {
+    final rtUnread = _notifications.where((n) => !n.read).length;
+    final myId = _currentUser?.id ?? '';
+    final pendingFriendReqs = _friendRequests.where((r) => r.toId == myId && !r.accepted).length;
+    return rtUnread + pendingFriendReqs + _pendingInvites.length + (_pendingVetoInvite != null ? 1 : 0);
+  }
+
+  void markAllNotificationsRead() {
+    for (final n in _notifications) {
+      n.read = true;
+    }
+    notifyListeners();
+  }
+
   final List<FriendRequest> _friendRequests = [];
   List<FriendRequest> get friendRequests => List.unmodifiable(_friendRequests);
 
-  // Resolved friend profiles (display name, username, avatar) — loaded after login
+  // Resolved friend profiles 
   final List<UserAccount> _friends = [];
   List<UserAccount> get friends => List.unmodifiable(_friends);
 
@@ -298,12 +525,132 @@ class AppState extends ChangeNotifier {
   final Map<String, UserAccount> _memberProfiles = {};
   Map<String, UserAccount> get memberProfiles => Map.unmodifiable(_memberProfiles);
 
+  // Caches a visited user's profile so avatar widgets can resolve their photo
+  // without needing to re-fetch. Called from UserProfileScreen after load.
+  void cacheMemberProfile(String userId, String displayName, String username, String? avatarUrl) {
+    if (userId == _currentUser?.id) return;
+    _memberProfiles[userId] = UserAccount(
+      id: userId,
+      username: username,
+      email: '',
+      displayName: displayName,
+      avatarBg: _avatarColor(userId),
+      avatarUrl: avatarUrl,
+    );
+  }
+
+  final List<WatchedMovie> _myWatchedMovies = [];
+  final Map<String, List<WatchedMovie>> _profileWatchedCache = {};
+  List<WatchedMovie> get myWatchedMovies => List.unmodifiable(_myWatchedMovies);
+  bool isWatched(String movieId) => _myWatchedMovies.any((m) => m.id == movieId);
+
+  final List<Map<String, dynamic>> _communityTopWatchlists = [];
+  final Set<String> _likedCommunityWatchlistIds = {};
+  List<Map<String, dynamic>> get communityTopWatchlists =>
+      List.unmodifiable(_communityTopWatchlists);
+
+  bool isCommunityWatchlistLiked(String watchlistId) {
+    final matches = _watchlists.where((w) => w.id == watchlistId);
+    if (matches.isNotEmpty) return matches.first.likedByMe;
+    return _likedCommunityWatchlistIds.contains(watchlistId);
+  }
+
+  Future<void> loadCommunityTopWatchlists() async {
+    final data = await ApiService.fetchTopWatchlists(limit: 20);
+    _communityTopWatchlists
+      ..clear()
+      ..addAll(data);
+    notifyListeners();
+  }
+
+  Future<void> likeCommunityWatchlist(String watchlistId) async {
+    if (_watchlists.any((w) => w.id == watchlistId)) {
+      likeWatchlist(watchlistId);
+      return;
+    }
+    final isLiked = _likedCommunityWatchlistIds.contains(watchlistId);
+    if (isLiked) {
+      _likedCommunityWatchlistIds.remove(watchlistId);
+    } else {
+      _likedCommunityWatchlistIds.add(watchlistId);
+    }
+    final idx = _communityTopWatchlists.indexWhere((w) => w['id'] == watchlistId);
+    if (idx >= 0) {
+      final updated = Map<String, dynamic>.from(_communityTopWatchlists[idx]);
+      updated['likes'] = ((updated['likes'] as int?) ?? 0) + (isLiked ? -1 : 1);
+      _communityTopWatchlists[idx] = updated;
+    }
+    notifyListeners();
+    try {
+      if (!isLiked) {
+        await ApiService.likeWatchlist(watchlistId, _currentUser?.id ?? 'guest');
+      } else {
+        await ApiService.unlikeWatchlist(watchlistId, _currentUser?.id ?? 'guest');
+      }
+    } catch (_) {
+      if (isLiked) {
+        _likedCommunityWatchlistIds.add(watchlistId);
+      } else {
+        _likedCommunityWatchlistIds.remove(watchlistId);
+      }
+      if (idx >= 0) {
+        final updated = Map<String, dynamic>.from(_communityTopWatchlists[idx]);
+        updated['likes'] = ((updated['likes'] as int?) ?? 0) + (isLiked ? 1 : -1);
+        _communityTopWatchlists[idx] = updated;
+      }
+      notifyListeners();
+    }
+  }
+
+  List<WatchedMovie> watchedMoviesForUser(String userId) {
+    if (userId == _currentUser?.id) return List.unmodifiable(_myWatchedMovies);
+    return List.unmodifiable(_profileWatchedCache[userId] ?? []);
+  }
+
   AppState() {
+    WidgetsBinding.instance.addObserver(this);
     // Pre-load trending titles for the onboarding and search screens
     loadTrending();
   }
 
-  // ─── Filtered + sorted movie list ─────────────────────────────────────────────
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _wlService.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      loadTrending();
+      // Re-establish WS and pull fresh movie sections in case we missed events while backgrounded.
+      if (_activeWatchlistId != null) {
+        connectToWatchlist(_activeWatchlistId!);
+        _refreshActiveWatchlist();
+      }
+    }
+  }
+
+  // Silently re-fetches the active watchlist's movies from the backend and
+  // updates in-place. Called on app resume to catch up on missed WS events.
+  Future<void> _refreshActiveWatchlist() async {
+    final wlId = _activeWatchlistId;
+    if (wlId == null) return;
+    final idx = _watchlists.indexWhere((w) => w.id == wlId);
+    if (idx == -1) return;
+    try {
+      final data = await ApiService.fetchWatchlistById(wlId);
+      final movies = (data['movies'] as List? ?? [])
+          .map((m) => _movieFromJson(m as Map<String, dynamic>))
+          .toList();
+      _watchlists[idx].movies
+        ..clear()
+        ..addAll(movies);
+      notifyListeners();
+    } catch (_) {}
+  }
+
   // TODO(backend): Replace with server-side sorting/filtering:
   // POST /watchlists/:id/movies/filter — body: { section, genre, sortBy, sortDir }
   List<Movie> moviesForSection(WatchSection section) {
@@ -329,7 +676,6 @@ class AppState extends ChangeNotifier {
     return list;
   }
 
-  // ─── Search ────────────────────────────────────────────────────────────────────
   Future<void> searchByGenre(String genre) async {
     if (_selectedGenre == genre) {
       _selectedGenre = null;
@@ -359,7 +705,6 @@ class AppState extends ChangeNotifier {
 
   // Starts a new search, resetting pagination to page 1.
   // Debounced 500ms in the UI layer before this is called.
-  // TODO(backend): Swap _imdb.searchTitles for your own endpoint to add auth and caching.
   Future<void> setSearchQuery(String q) async {
     if (q.isNotEmpty && _selectedGenre != null) {
       _selectedGenre = null;
@@ -383,6 +728,54 @@ class AppState extends ChangeNotifier {
     await _fetchSearchPage(_searchPageHistory.last);
   }
 
+  // Searches all watchlist movies and personal watch history by title/director.
+  // Returns Movie objects whose IDs aren't in excludeIds (dedup against API results).
+  List<Movie> _searchPersonalDb(String query, Set<String> excludeIds) {
+    final q = query.toLowerCase();
+    final seen = <String>{...excludeIds};
+    final results = <Movie>[];
+
+    for (final wl in _watchlists) {
+      for (final m in wl.movies) {
+        if (seen.contains(m.id)) continue;
+        if (m.title.toLowerCase().contains(q) ||
+            m.director.toLowerCase().contains(q)) {
+          seen.add(m.id);
+          results.add(m);
+        }
+      }
+    }
+
+    for (final wm in _myWatchedMovies) {
+      if (seen.contains(wm.id)) continue;
+      if (wm.title.toLowerCase().contains(q)) {
+        seen.add(wm.id);
+        results.add(Movie(
+          id: wm.id,
+          title: wm.title,
+          year: wm.year,
+          runtime: 0,
+          rating: 0,
+          genres: [],
+          director: '',
+          streamId: '',
+          addedBy: '',
+          section: WatchSection.want,
+          synopsis: '',
+          poster: (wm.posterUrl?.isNotEmpty ?? false)
+              ? PosterData(
+                  gradient: _fallbackPoster.gradient,
+                  accent: _fallbackPoster.accent,
+                  imageUrl: wm.posterUrl,
+                )
+              : _fallbackPoster,
+        ));
+      }
+    }
+
+    return results;
+  }
+
   // Fetches search results for the current query using the given page token.
   // Each call stamps a generation number; if a newer call has started by the
   // time this one resolves, the response is silently dropped so stale data
@@ -395,7 +788,9 @@ class AppState extends ChangeNotifier {
     if (pageToken == null) {
       final hit = _searchCache[_searchQuery];
       if (hit != null) {
-        _searchRawResults = hit.$1;
+        final apiIds = hit.$1.map((m) => m.id).toSet();
+        final personal = _searchPersonalDb(_searchQuery, apiIds);
+        _searchRawResults = personal.isEmpty ? hit.$1 : [...hit.$1, ...personal];
         _searchNextPageToken = hit.$2;
         _searchLoading = false;
         notifyListeners();
@@ -409,14 +804,19 @@ class AppState extends ChangeNotifier {
       final (movies, nextToken) =
           await _imdb.searchTitles(_searchQuery, pageToken: pageToken);
       if (myGen != _searchGeneration) return; // superseded by a newer query
-      _searchRawResults = movies;
       _searchNextPageToken = nextToken;
-      // Cache first-page results for this query so retypes are instant.
+      // Cache only the API portion so personal DB is always re-computed live.
       if (pageToken == null) {
         _searchCache[_searchQuery] = (movies, nextToken);
         if (_searchCache.length > _kSearchCacheMax) {
           _searchCache.remove(_searchCache.keys.first);
         }
+        // Append personal DB matches on the first page only (deduped by ID).
+        final apiIds = movies.map((m) => m.id).toSet();
+        final personal = _searchPersonalDb(_searchQuery, apiIds);
+        _searchRawResults = personal.isEmpty ? movies : [...movies, ...personal];
+      } else {
+        _searchRawResults = movies;
       }
     } catch (e) {
       if (myGen != _searchGeneration) return;
@@ -462,25 +862,32 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  // Loads the 10 most popular titles from the IMDb API for the onboarding collage
-  // and search screen trending rail.
+  // Loads popular titles from the IMDb API for the onboarding collage and search/review
+  // trending rails. TTL-gated so warm starts and app-resume don't hammer the API.
+  // Falls back to cached data on failure so the UI never goes blank.
   Future<void> loadTrending() async {
-    if (_trendingLoading) return; // prevent concurrent fetches
+    if (_trendingLoading) return;
+    final hasData = _trendingMovies.isNotEmpty;
+    final isFresh = _trendingLoadedAt != null &&
+        DateTime.now().difference(_trendingLoadedAt!) < _kTrendingTtl;
+    if (hasData && isFresh) return;
     _trendingLoading = true;
-    _trendingLoaded = false;
+    if (!hasData) _trendingLoaded = false;
     notifyListeners();
     try {
-      _trendingMovies = await _imdb.fetchTrending();
-    } catch (_) {
-      _trendingMovies = [];
-    } finally {
+      final movies = await _imdb.fetchTrending();
+      if (movies.isNotEmpty) {
+        _trendingMovies = movies;
+        _trendingLoadedAt = DateTime.now();
+      }
+    } catch (_) {} // keep existing data on failure
+    finally {
       _trendingLoading = false;
       _trendingLoaded = true;
       notifyListeners();
     }
   }
 
-  // ─── Watchlist CRUD ────────────────────────────────────────────────────────────
   
   Future<Watchlist> createWatchlist(String name) async {
     final result = await ApiService.createWatchlist(
@@ -492,6 +899,7 @@ class AppState extends ChangeNotifier {
       id: result['id'],
       name: name,
       listKey: result['listKey'] ?? '',
+      memberIds: [_currentUser?.id ?? 'guest'],
     );
     _watchlists.add(wl);
     _activeWatchlistId ??= wl.id;
@@ -499,7 +907,6 @@ class AppState extends ChangeNotifier {
     return wl;
   }
 
-  //Update websocket
   void connectToWatchlist(String watchlistId) {
     _wlSub?.cancel();
     _wlService.connect(watchlistId);
@@ -549,20 +956,65 @@ class AppState extends ChangeNotifier {
     return List.generate(6, (_) => chars[rng.nextInt(chars.length)]).join();
   }
 
-  Future<void> addMemberToWatchlist(String watchlistId, String auth0Sub) async {
-    await ApiService.addMemberToWatchlist(watchlistId: watchlistId, auth0Sub: auth0Sub);
-    final idx = _watchlists.indexWhere((w) => w.id == watchlistId);
-    if (idx != -1 && !_watchlists[idx].memberIds.contains(auth0Sub)) {
-      _watchlists[idx].memberIds.add(auth0Sub);
-      notifyListeners();
-    }
+  Future<void> addMemberToWatchlist(String watchlistId, String userId) async {
+    await ApiService.addMemberToWatchlist(watchlistId: watchlistId, userId: userId);
+    // Invite sent — recipient must accept; don't add to memberIds yet
   }
 
-  // ─── Watchlist mutations ───────────────────────────────────────────────────────
-  // TODO(backend): Each mutation should also POST/PATCH your API and broadcast
-  // the change over the room's WebSocket channel so all members see it live.
+  Future<void> leaveWatchlist(String watchlistId) async {
+    _watchlists.removeWhere((w) => w.id == watchlistId);
+    if (_activeWatchlistId == watchlistId) {
+      _activeWatchlistId = _watchlists.isNotEmpty ? _watchlists.first.id : null;
+    }
+    notifyListeners();
+    await ApiService.leaveWatchlist(watchlistId);
+  }
+
+  Future<void> acceptWatchlistInvite(String watchlistId, String inviteId) async {
+    final data = await ApiService.acceptWatchlistInvite(
+      watchlistId: watchlistId,
+      inviteId: inviteId,
+    );
+    _pendingInvites.removeWhere((inv) => inv.id == inviteId);
+    if (!_watchlists.any((w) => w.id == watchlistId)) {
+      final movies = (data['movies'] as List? ?? [])
+          .map((m) => _movieFromJson(m as Map<String, dynamic>))
+          .toList();
+      final newWlId = data['id'] as String;
+      // Auto-move any films the user already watched to the watched section
+      for (final movie in movies) {
+        if (movie.section != WatchSection.watched && isWatched(movie.id)) {
+          movie.section = WatchSection.watched;
+          ApiService.patchMovie(
+            watchlistId: newWlId,
+            movieId: movie.id,
+            section: 'watched',
+            memberId: _currentUser?.id,
+          ).catchError((_) {});
+        }
+      }
+      _watchlists.add(Watchlist(
+        id: newWlId,
+        name: data['name'] as String? ?? '',
+        listKey: data['listKey'] as String? ?? '',
+        memberIds: (data['memberIds'] as List? ?? []).cast<String>(),
+        movies: movies,
+      ));
+      setActiveWatchlist(newWlId);
+    }
+    notifyListeners();
+  }
+
+  Future<void> declineWatchlistInvite(String watchlistId, String inviteId) async {
+    _pendingInvites.removeWhere((inv) => inv.id == inviteId);
+    notifyListeners();
+    await ApiService.declineWatchlistInvite(watchlistId: watchlistId, inviteId: inviteId);
+  }
 
   // Adds a movie to a specific watchlist (by id) or to the active one if omitted.
+  // If the movie is a search stub (no rating/runtime/synopsis), it is added
+  // immediately for instant UI feedback and then enriched in the background
+  // before the backend save so the stored record has full metadata.
   void addMovieToWatchlist(Movie movie, {String? watchlistId}) async {
     final target = watchlistId != null
         ? _watchlists.firstWhere((w) => w.id == watchlistId,
@@ -586,24 +1038,49 @@ class AppState extends ChangeNotifier {
         at: DateTime.now(),
       ));
       notifyListeners();
+
+      Movie toSave = movie;
+      if (movie.rating == 0 && movie.runtime == 0 && movie.synopsis.isEmpty) {
+        try {
+          final enriched = await _imdb.fetchTitle(movie.id);
+          toSave = enriched;
+          final idx = target.movies.indexWhere((m) => m.id == movie.id);
+          if (idx != -1) {
+            target.movies[idx] = Movie(
+              id: enriched.id, title: enriched.title, year: enriched.year,
+              runtime: enriched.runtime, rating: enriched.rating,
+              genres: enriched.genres, director: enriched.director,
+              streamId: enriched.streamId, addedBy: _currentUser?.id ?? 'guest',
+              section: WatchSection.want, synopsis: enriched.synopsis,
+              poster: enriched.poster,
+            );
+            notifyListeners();
+          }
+        } catch (_) {}
+      }
+
       await ApiService.addMovie(
         watchlistId: target.id,
-        movieId: movie.id,
-        title: movie.title,
-        year: movie.year,
+        movieId: toSave.id,
+        title: toSave.title,
+        year: toSave.year,
         addedBy: _currentUser?.id ?? 'guest',
-        runtime: movie.runtime,
-        rating: movie.rating,
-        genres: movie.genres,
-        director: movie.director,
-        streamId: movie.streamId,
-        synopsis: movie.synopsis,
-        imageUrl: movie.poster.imageUrl,
+        runtime: toSave.runtime,
+        rating: toSave.rating,
+        genres: toSave.genres,
+        director: toSave.director,
+        streamId: toSave.streamId,
+        synopsis: toSave.synopsis,
+        imageUrl: toSave.poster.imageUrl,
       );
     }
   }
 
   void moveMovie(String movieId, WatchSection newSection) async {
+    // 'watched' section moves are handled exclusively by markMovieWatched so
+    // the server can enforce the "all members watched" rule before promoting.
+    // Any call here with WatchSection.watched is a mistake — ignore it.
+    if (newSection == WatchSection.watched) return;
     final movies = activeWatchlist?.movies;
     if (movies == null) return;
     final idx = movies.indexWhere((m) => m.id == movieId);
@@ -629,7 +1106,6 @@ class AppState extends ChangeNotifier {
   }
 
   // Moves the veto winner to the front of the Want to Watch section.
-  // TODO(backend): PATCH /watchlists/:id/movies/:movieId/promote — sets section=want and sortOrder=0
   void promoteToTopPick(String movieId) {
     final movies = activeWatchlist?.movies;
     if (movies == null) return;
@@ -641,6 +1117,19 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Promotes a movie and broadcasts the change to all watchlist members via WS.
+  Future<void> promoteToTopPickAndSync(String movieId) async {
+    promoteToTopPick(movieId);
+    final wlId = activeWatchlist?.id;
+    if (wlId != null) {
+      ApiService.promoteMovie(
+        watchlistId: wlId,
+        movieId: movieId,
+        promotedBy: _currentUser?.id,
+      ).catchError((_) {});
+    }
+  }
+
   void removeMovie(String movieId) async {
     final wlId = activeWatchlist?.id;
     if (wlId == null) return;
@@ -649,7 +1138,7 @@ class AppState extends ChangeNotifier {
     await ApiService.removeMovie(watchlistId: wlId, movieId: movieId);
   }
 
-  // If watchlists exist but none is active (e.g. after a logout/login edge case),
+  // If watchlists exist but none is active,
   // silently activate the first one so mutations don't no-op.
   void ensureActiveWatchlist() {
     if (_activeWatchlistId == null && _watchlists.isNotEmpty) {
@@ -658,7 +1147,6 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  // ─── Star rating ───────────────────────────────────────────────────────────────
   void rateMovie(String movieId, String memberId, double stars) async {
     final movies = activeWatchlist?.movies;
     if (movies == null) return;
@@ -683,7 +1171,6 @@ class AppState extends ChangeNotifier {
     );
   }
 
-  // ─── Reactions ─────────────────────────────────────────────────────────────────
   void reactToMovie(String movieId, String memberId, ReactionType reaction) async {
     final movies = activeWatchlist?.movies;
     if (movies == null) return;
@@ -708,7 +1195,6 @@ class AppState extends ChangeNotifier {
     );
   }
 
-  // ─── Notes ─────────────────────────────────────────────────────────────────────
   void addNote(String movieId, String memberId, String text) async {
     final movies = activeWatchlist?.movies;
     if (movies == null) return;
@@ -733,7 +1219,6 @@ class AppState extends ChangeNotifier {
     );
   }
 
-  // ─── Sort & filter ─────────────────────────────────────────────────────────────
   void setSortOrder(SortOrder order) {
     _sortOrder = order;
     notifyListeners();
@@ -744,47 +1229,69 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ─── Auth — Auth0 Universal Login ──────────────────────────────────────────────
-  
-  //After login, send the Auth0 access_token to your backend at
-  // POST /auth/verify to get a session token, then load the user's watchlist data.
-  Future<void> login() async {
-    // Only _authService.login() propagates — a down backend never shows "Sign in failed"
-    // when Auth0 actually succeeded.
-    final result = await _authService.login();
+
+  Future<void> login(String email, String password, {bool rememberMe = true}) async {
+    final (:result, :accessToken, :refreshToken) = await _authService.login(
+      email: email,
+      password: password,
+    );
+    ApiService.setToken(accessToken);
+    if (rememberMe) {
+      await _authService.storeSession(
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+        userId: result.userId,
+      );
+    }
     _isLoggedIn = true;
     _isGuest = false;
     _currentUser = _userFromAuthResult(result);
     notifyListeners();
+    _scheduleTokenRefresh(refreshToken);
     try {
-      final userData = await ApiService.upsertUser(
-        auth0Sub: _currentUser!.id,
-        username: _currentUser!.username,
-        email: _currentUser!.email,
-        displayName: _currentUser!.displayName,
-      );
-      // Sync server-stored fields back so friendIds/roomKey/displayName/avatarUrl are correct
-      _currentUser!.friendIds = (userData['friendIds'] as List? ?? []).cast<String>();
-      if (userData['roomKey'] != null) _currentUser!.roomKey = userData['roomKey'] as String;
-      if (userData['displayName'] != null) _currentUser!.displayName = userData['displayName'] as String;
-      if (userData['avatarUrl'] != null) _currentUser!.avatarUrl = userData['avatarUrl'] as String;
-      notifyListeners();
       await _loadWatchlists();
       await _loadFriendRequests();
       await _loadFriends();
       await loadFollowing();
+      await _loadInvites();
       _connectNotifications();
-    } catch (_) {
-      // Backend unavailable — user is still logged in; data reloads on next open
-    }
+      _userWatchedLoadedAt.remove(_currentUser!.id);
+      await _loadMyWatchedMovies();
+    } catch (_) {}
   }
 
-  // Clears the Auth0 browser session and resets all local state.
-  // TODO(backend): Also call POST /auth/logout on your backend to invalidate
-  // the session token stored server-side.
+  Future<void> register(
+    String username,
+    String email,
+    String password,
+    String displayName,
+  ) async {
+    final message = await _authService.register(
+      username: username,
+      email: email,
+      password: password,
+      displayName: displayName,
+    );
+    // Registration succeeded but user must verify email before logging in.
+    // Throw so the auth screen can show a check-email prompt.
+    throw RegistrationPendingException(message);
+  }
+
+  Future<void> resendVerification(String email) async {
+    await _authService.resendVerification(email);
+  }
+
+  Future<void> forgotPassword(String email) async {
+    await _authService.forgotPassword(email);
+  }
+
   Future<void> logout() async {
-    await _authService.logout();
-    await _authService.clearStoredCredentials();
+    _tokenRefreshTimer?.cancel();
+    _tokenRefreshTimer = null;
+    final stored = await _authService.getStoredSession();
+    if (stored != null) await _authService.logout(stored.refreshToken);
+    await _authService.clearSession();
+    ApiService.setToken(null);
     _notifSub?.cancel();
     _notifService.disconnect();
     _isLoggedIn = false;
@@ -796,6 +1303,13 @@ class AppState extends ChangeNotifier {
     _friends.clear();
     _friendRequests.clear();
     _memberProfiles.clear();
+    _pendingInvites.clear();
+    _notifications.clear();
+    _myWatchedMovies.clear();
+    _profileWatchedCache.clear();
+    _publicReviewsLoadedAt = null;
+    _userReviewsLoadedAt.clear();
+    _userWatchedLoadedAt.clear();
     notifyListeners();
   }
 
@@ -817,45 +1331,88 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Checks for a valid existing Auth0 session on app start — avoids forcing
-  // the user to log in again if their refresh token is still valid.
-  // TODO(backend): On success also refresh the backend session token.
   Future<void> tryRestoreSession() async {
-    final result = await _authService.getStoredCredentials();
-    if (result != null) {
-      _isLoggedIn = true;
-      _isGuest = false;
-      _currentUser = _userFromAuthResult(result);
-      notifyListeners();
-      try {
-        // Sync server-stored data (friendIds, displayName, roomKey, avatarUrl) not in stored credentials
-        final userData = await ApiService.fetchUser(
-          _currentUser!.id,
-          requesterId: _currentUser!.id,
-        );
-        _currentUser!.friendIds = (userData['friendIds'] as List? ?? []).cast<String>();
-        if (userData['displayName'] != null) _currentUser!.displayName = userData['displayName'] as String;
-        if (userData['roomKey'] != null) _currentUser!.roomKey = userData['roomKey'] as String;
-        if (userData['avatarUrl'] != null) _currentUser!.avatarUrl = userData['avatarUrl'] as String;
-        notifyListeners();
-      } catch (_) {}
-      await _loadWatchlists();
-      await _loadFriendRequests();
-      await _loadFriends();
-      await loadFollowing();
-      _connectNotifications();
+    final stored = await _authService.getStoredSession();
+    if (stored == null) return;
+
+    // Refresh the access token — 15min TTL means it's often expired on cold start.
+    final newToken = await _authService.refreshAccessToken(stored.refreshToken);
+    if (newToken == null) {
+      await _authService.clearSession();
+      return;
     }
+    ApiService.setToken(newToken);
+    await _authService.storeSession(
+      accessToken: newToken,
+      refreshToken: stored.refreshToken,
+      userId: stored.userId,
+    );
+
+    _isLoggedIn = true;
+    _isGuest = false;
+    try {
+      final userData = await ApiService.fetchUser(stored.userId, requesterId: stored.userId);
+      _currentUser = UserAccount(
+        id: stored.userId,
+        username: userData['username'] as String? ?? '',
+        email: '',
+        displayName: userData['displayName'] as String? ?? '',
+        avatarBg: _avatarColor(stored.userId),
+        avatarUrl: userData['avatarUrl'] as String?,
+        roomKey: userData['roomKey'] as String?,
+      );
+      _currentUser!.friendIds = (userData['friendIds'] as List? ?? []).cast<String>();
+    } catch (_) {
+      _currentUser = UserAccount(
+        id: stored.userId,
+        username: '',
+        email: '',
+        displayName: '',
+        avatarBg: _avatarColor(stored.userId),
+      );
+    }
+    _scheduleTokenRefresh(stored.refreshToken);
+    notifyListeners();
+    await _loadWatchlists();
+    await _loadFriendRequests();
+    await _loadFriends();
+    await loadFollowing();
+    await _loadInvites();
+    _connectNotifications();
+    _userWatchedLoadedAt.remove(_currentUser!.id);
+    await _loadMyWatchedMovies();
   }
 
-  // Builds a UserAccount from the platform-agnostic AuthResult.
+  void _scheduleTokenRefresh(String refreshToken) {
+    _tokenRefreshTimer?.cancel();
+    _tokenRefreshTimer = Timer.periodic(const Duration(minutes: 14), (_) async {
+      final newToken = await _authService.refreshAccessToken(refreshToken);
+      if (newToken != null) {
+        ApiService.setToken(newToken);
+        final stored = await _authService.getStoredSession();
+        if (stored != null) {
+          await _authService.storeSession(
+            accessToken: newToken,
+            refreshToken: stored.refreshToken,
+            userId: stored.userId,
+          );
+        }
+      }
+    });
+  }
+
   UserAccount _userFromAuthResult(AuthResult result) {
-    return UserAccount(
-      id: result.sub,
-      username: result.nickname ?? result.name,
-      email: result.email ?? '',
-      displayName: result.name,
-      avatarBg: _avatarColor(result.sub),
+    final account = UserAccount(
+      id: result.userId,
+      username: result.username,
+      email: result.email,
+      displayName: result.displayName,
+      avatarBg: _avatarColor(result.userId),
+      avatarUrl: result.avatarUrl,
+      roomKey: result.roomKey,
     );
+    account.friendIds = result.friendIds.toList();
+    return account;
   }
 
   // Deterministically picks one of the brand palette colours based on the user ID.
@@ -867,7 +1424,6 @@ class AppState extends ChangeNotifier {
     return palette[id.hashCode.abs() % palette.length];
   }
 
-  // ─── Profile edits ────────────────────────────────────────────────────────────
   Future<void> updateProfile({String? displayName, String? avatarFilePath}) async {
     if (_currentUser == null) return;
     final trimmed = displayName?.trim();
@@ -877,20 +1433,19 @@ class AppState extends ChangeNotifier {
     String? cloudAvatarUrl;
     if (avatarFilePath != null) {
       cloudAvatarUrl = await ApiService.uploadAvatar(
-        auth0Sub: _currentUser!.id,
+        userId: _currentUser!.id,
         filePath: avatarFilePath,
       );
       _currentUser!.avatarUrl = cloudAvatarUrl;
     }
     notifyListeners();
     await ApiService.updateProfile(
-      auth0Sub: _currentUser!.id,
+      userId: _currentUser!.id,
       displayName: trimmed?.isNotEmpty == true ? trimmed : null,
       avatarUrl: cloudAvatarUrl,
     );
   }
 
-  // ─── Room key ─────────────────────────────────────────────────────────────────
   // POST /users/:id/room-key — returns guaranteed-unique 6-char key.
   Future<void> generateRoomKey() async {
     if (_currentUser == null) return;
@@ -899,7 +1454,7 @@ class AppState extends ChangeNotifier {
       key = _generateRoomCode();
     } while (await ApiService.checkRoomKey(key));
 
-    await ApiService.saveRoomKey(auth0Sub: _currentUser!.id, roomKey: key);
+    await ApiService.saveRoomKey(userId: _currentUser!.id, roomKey: key);
     _currentUser!.roomKey = key;
     notifyListeners();
   }
@@ -912,7 +1467,7 @@ class AppState extends ChangeNotifier {
         ? await ApiService.findRoom(listKey: k)
         : await ApiService.joinRoom(
             listKey: k,
-            auth0Sub: _currentUser?.id ?? 'guest',
+            userId: _currentUser?.id ?? 'guest',
           );
     if (!_watchlists.any((w) => w.id == data['id'])) {
       final movies = (data['movies'] as List? ?? []).map((m) => _movieFromJson(m as Map<String, dynamic>)).toList();
@@ -923,18 +1478,15 @@ class AppState extends ChangeNotifier {
         memberIds: (data['memberIds'] as List? ?? []).cast<String>(),
         movies: movies,
       ));
-      _activeWatchlistId ??= data['id'] as String;
-      connectToWatchlist(data['id'] as String);
+      setActiveWatchlist(data['id'] as String);
       notifyListeners();
     }
   }
 
-  // ─── Watchlist rooms ───────────────────────────────────────────────────────────
   Future<void> joinRoom(String code) async {
     await joinRoomByKey(code);
   }
 
-  // ─── Friends ───────────────────────────────────────────────────────────────────
   Future<void> sendFriendRequest(String toUserId) async {
     if (_currentUser == null) return;
     final result = await ApiService.sendFriendRequest(
@@ -979,7 +1531,6 @@ class AppState extends ChangeNotifier {
     )).toList();
   }
 
-  // ─── Helpers ───────────────────────────────────────────────────────────────────
 
   Future<void> _loadWatchlists() async {
     if (_currentUser == null) return;
@@ -988,12 +1539,15 @@ class AppState extends ChangeNotifier {
       _watchlists.clear();
       for (final wl in data) {
         final movies = (wl['movies'] as List? ?? []).map((m) => _movieFromJson(m as Map<String, dynamic>)).toList();
+        final likedBy = (wl['likedBy'] as List? ?? []).cast<String>();
         _watchlists.add(Watchlist(
           id: wl['id'] as String,
           name: wl['name'] as String? ?? '',
           listKey: wl['listKey'] as String? ?? '',
           memberIds: (wl['memberIds'] as List? ?? []).cast<String>(),
           movies: movies,
+          likes: (wl['likes'] as num?)?.toInt() ?? 0,
+          likedByMe: likedBy.contains(_currentUser?.id),
         ));
         // Cache member profiles so activity/avatar widgets have names+photos for non-friends
         for (final m in (wl['members'] as List? ?? [])) {
@@ -1012,10 +1566,10 @@ class AppState extends ChangeNotifier {
         }
       }
       _activeWatchlistId ??= _watchlists.isNotEmpty ? _watchlists.first.id : null;
-      //Check before websocket connection
       if(_activeWatchlistId != null) connectToWatchlist(_activeWatchlistId!);
       notifyListeners();
       _backfillMissingPosters(); // fire-and-forget; updates UI when done
+      _loadActivity(); // fire-and-forget; populates activity feed from backend
     } catch (_) {
       // Non-critical on session restore — watchlists stay empty if fetch fails
     }
@@ -1037,6 +1591,25 @@ class AppState extends ChangeNotifier {
         if(idx != -1) wl.movies[idx] = updated;
       case 'movie_removed':
         wl.movies.removeWhere((m) => m.id == event.data['movieId']);
+      case 'movie_promoted':
+        final promotedId = event.data['movieId'] as String?;
+        final promotedBy = event.data['promotedBy'] as String?;
+        if (promotedId != null && promotedBy != _currentUser?.id) {
+          final idx = wl.movies.indexWhere((m) => m.id == promotedId);
+          if (idx != -1) {
+            final movie = wl.movies.removeAt(idx);
+            movie.section = WatchSection.want;
+            wl.movies.insert(0, movie);
+          }
+        }
+      case 'member_joined':
+        final joinedId = event.data['userId'] as String?;
+        if (joinedId != null && !wl.memberIds.contains(joinedId)) {
+          wl.memberIds.add(joinedId);
+        }
+      case 'member_left':
+        final leftId = event.data['userId'] as String?;
+        if (leftId != null) wl.memberIds.remove(leftId);
       case 'activity_added':
         final e = event.data['event'] as Map<String, dynamic>;
         final whoId = e['who'] as String? ?? '';
@@ -1059,6 +1632,77 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> refreshActivity() async {
+    await Future.wait([_loadActivity(), _loadInvites()]);
+  }
+
+  Future<void> _loadActivity() async {
+    if (_watchlists.isEmpty) return;
+    try {
+      final all = <ActivityEvent>[];
+      for (final wl in _watchlists) {
+        final data = await ApiService.fetchWatchlistActivity(wl.id);
+        for (final e in data) {
+          ReactionType? reaction;
+          try {
+            if (e['reaction'] != null) {
+              reaction = ReactionType.values.byName(e['reaction'] as String);
+            }
+          } catch (_) {}
+          ActivityKind kind;
+          try {
+            kind = ActivityKind.values.byName(
+                (e['kind'] as String? ?? 'added').toLowerCase());
+          } catch (_) {
+            kind = ActivityKind.added;
+          }
+          all.add(ActivityEvent(
+            id: e['id'] as String?,
+            kind: kind,
+            who: e['who'] as String? ?? '',
+            movieId: e['movieId'] as String?,
+            text: e['text'] as String?,
+            to: e['to'] as String?,
+            reaction: reaction,
+            stars: (e['stars'] as num?)?.toDouble(),
+            at: DateTime.tryParse(e['at']?.toString() ?? '') ?? DateTime.now(),
+          ));
+        }
+      }
+      // Dedup by id (server events have UUIDs), keep most recent 200
+      final seen = <String>{};
+      final deduped = <ActivityEvent>[];
+      for (final e in all) {
+        final key = e.id ?? '${e.who}|${e.kind.name}|${e.at.millisecondsSinceEpoch}';
+        if (seen.add(key)) deduped.add(e);
+      }
+      deduped.sort((a, b) => b.at.compareTo(a.at));
+      _activity
+        ..clear()
+        ..addAll(deduped.take(200));
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> _loadInvites() async {
+    if (_currentUser == null) return;
+    try {
+      final data = await ApiService.fetchPendingInvites(_currentUser!.id);
+      _pendingInvites.clear();
+      for (final inv in data) {
+        _pendingInvites.add(WatchlistInvite(
+          id: inv['id'] as String,
+          watchlistId: inv['watchlistId'] as String,
+          watchlistName: inv['watchlistName'] as String? ?? '',
+          inviterId: inv['inviterId'] as String,
+          inviterName: inv['inviterName'] as String? ?? '',
+          inviterAvatarUrl: inv['inviterAvatarUrl'] as String?,
+        ));
+      }
+      notifyListeners();
+    } catch (_) {}
+  }
+
   Movie _movieFromJson(Map<String, dynamic> m){
     final imageUrl = m['imageUrl'] as String?;
     return Movie(
@@ -1073,6 +1717,7 @@ class AppState extends ChangeNotifier {
             addedBy: m['addedBy'] ?? 'guest',
             section: _parseSection(m['section'] as String?),
             synopsis: m['synopsis'] ?? '',
+            watchedBy: (m['watchedBy'] as List? ?? []).cast<String>(),
             poster: imageUrl != null && imageUrl.isNotEmpty
                 ? PosterData(
                     gradient: _fallbackPoster.gradient,
@@ -1097,11 +1742,11 @@ class AppState extends ChangeNotifier {
           avatarBg: _avatarColor(u['id'] as String),
           avatarUrl: u['avatarUrl'] as String?,
         )));
-      // Keep friendIds in sync with server-authoritative list
+      // Keep friendIds in sync 
       _currentUser!.friendIds = _friends.map((f) => f.id).toList();
       notifyListeners();
     } catch (_) {
-      // Non-critical — friend display names degrade to IDs if fetch fails
+      //friend display names degrade to IDs if fetch fails
     }
   }
 
@@ -1116,12 +1761,27 @@ class AppState extends ChangeNotifier {
           fromId: r['fromId'] as String,
           toId: r['toId'] as String,
           sentAt: DateTime.tryParse(r['createdAt'] as String? ?? '') ?? DateTime.now(),
+          fromUsername:    r['fromUsername']    as String?,
+          fromDisplayName: r['fromDisplayName'] as String?,
+          fromAvatarUrl:   r['fromAvatarUrl']   as String?,
         ));
       }
       notifyListeners();
     } catch (_) {
-      // Non-critical — friend requests stay empty if fetch fails
+      // friend requests stay empty if fetch fails
     }
+  }
+
+  Future<void> refreshProfile() async {
+    if (_currentUser == null) return;
+    _userWatchedLoadedAt.remove(_currentUser!.id); 
+    await Future.wait([
+      _loadWatchlists(),
+      _loadFriendRequests(),
+      _loadFriends(),
+      loadFollowing(),
+      loadUserWatchedMovies(_currentUser!.id),
+    ]);
   }
 
   WatchSection _parseSection(String? s) {
@@ -1141,8 +1801,7 @@ class AppState extends ChangeNotifier {
     accent: Color(0xFFF6C453),
   );
 
-  // Best-effort background fetch — fills in imageUrl for movies that predate
-  // the Firestore imageUrl field. Fires and forgets; notifies once done.
+  // Best-effort background fetch
   Future<void> _backfillMissingPosters() async {
     bool changed = false;
     for (final wl in _watchlists) {
@@ -1178,7 +1837,8 @@ class AppState extends ChangeNotifier {
   }
 
   void _onNotification(Map<String, dynamic> msg) {
-    if (msg['type'] == 'veto_invite') {
+    final type = msg['type'] as String?;
+    if (type == 'veto_invite') {
       if (msg['fromId'] != _currentUser?.id) {
         _pendingVetoInvite = VetoInvite(
           fromId: msg['fromId'] as String? ?? '',
@@ -1188,6 +1848,68 @@ class AppState extends ChangeNotifier {
         );
         notifyListeners();
       }
+    } else if (type == 'watchlist_invite') {
+      final inviteId = msg['inviteId'] as String?;
+      final watchlistId = msg['watchlistId'] as String?;
+      if (inviteId != null && watchlistId != null &&
+          !_pendingInvites.any((inv) => inv.id == inviteId)) {
+        _pendingInvites.add(WatchlistInvite(
+          id: inviteId,
+          watchlistId: watchlistId,
+          watchlistName: msg['watchlistName'] as String? ?? '',
+          inviterId: msg['inviterId'] as String? ?? '',
+          inviterName: msg['inviterName'] as String? ?? '',
+          inviterAvatarUrl: msg['inviterAvatarUrl'] as String?,
+        ));
+        notifyListeners();
+      }
+    } else if (type == 'like_review') {
+      _notifications.insert(0, AppNotification(
+        id: 'notif_${DateTime.now().millisecondsSinceEpoch}',
+        type: NotifType.likedReview,
+        at: DateTime.now(),
+        fromId: msg['fromId'] as String?,
+        fromName: msg['fromName'] as String?,
+        fromHandle: msg['fromHandle'] as String?,
+        fromAvatarUrl: msg['fromAvatarUrl'] as String?,
+        reviewId: msg['reviewId'] as String?,
+        movieTitle: msg['movieTitle'] as String?,
+      ));
+      notifyListeners();
+    } else if (type == 'like_watchlist') {
+      _notifications.insert(0, AppNotification(
+        id: 'notif_${DateTime.now().millisecondsSinceEpoch}',
+        type: NotifType.likedWatchlist,
+        at: DateTime.now(),
+        fromId: msg['fromId'] as String?,
+        fromName: msg['fromName'] as String?,
+        fromHandle: msg['fromHandle'] as String?,
+        fromAvatarUrl: msg['fromAvatarUrl'] as String?,
+        watchlistId: msg['watchlistId'] as String?,
+        watchlistName: msg['watchlistName'] as String?,
+      ));
+      notifyListeners();
+    } else if (type == 'follow') {
+      _notifications.insert(0, AppNotification(
+        id: 'notif_${DateTime.now().millisecondsSinceEpoch}',
+        type: NotifType.followed,
+        at: DateTime.now(),
+        fromId: msg['fromId'] as String?,
+        fromName: msg['fromName'] as String?,
+        fromHandle: msg['fromHandle'] as String?,
+        fromAvatarUrl: msg['fromAvatarUrl'] as String?,
+      ));
+      notifyListeners();
+    } else if (type == 'friend_review') {
+      _activity.insert(0, ActivityEvent(
+        kind: ActivityKind.postedReview,
+        who: msg['fromId'] as String? ?? '',
+        movieId: msg['movieId'] as String?,
+        text: msg['movieTitle'] as String?,
+        stars: (msg['stars'] as num?)?.toDouble(),
+        at: DateTime.tryParse(msg['at'] as String? ?? '') ?? DateTime.now(),
+      ));
+      notifyListeners();
     }
   }
 
@@ -1284,8 +2006,8 @@ class AppState extends ChangeNotifier {
     return List.from(_reviews); // All Time
   }
 
-  List<Review> get reviewsThisWeek {
-    final cutoff = DateTime.now().subtract(const Duration(days: 7));
+  List<Review> get reviewsThisMonth {
+    final cutoff = DateTime.now().subtract(const Duration(days: 31));
     return _reviews.where((r) => r.at.isAfter(cutoff)).toList();
   }
 

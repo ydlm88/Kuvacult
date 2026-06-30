@@ -1,3 +1,4 @@
+// app_tab_bar.dart — Floating pill-shaped bottom navigation bar with a raised accent center action button.
 import 'package:flutter/material.dart';
 import '../theme.dart';
 
@@ -67,7 +68,7 @@ class AppTabBar extends StatelessWidget {
       child: Container(
         width: 52,
         height: 52,
-        margin: const EdgeInsets.only(bottom: 20),
+        margin: const EdgeInsets.only(bottom: 8),
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           gradient: const LinearGradient(

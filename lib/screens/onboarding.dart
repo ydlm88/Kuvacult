@@ -1,3 +1,4 @@
+// onboarding.dart — Splash/landing screen shown to new users, featuring a poster grid backdrop and CTA to sign up.
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme.dart';
@@ -15,21 +16,18 @@ class OnboardingScreen extends StatelessWidget {
       backgroundColor: MC.bg0,
       body: Stack(
         children: [
-          // ── Angled poster collage — uses live trending movies from the API ────
-          // Consumer rebuilds the collage whenever loadTrending() completes.
-          // While the API call is in-flight the placeholders show gradient cards.
           Positioned(
             top: 60,
             left: -40,
             right: -40,
             height: 460,
             child: Transform.rotate(
-              angle: -0.105, // ~-6 degrees
+              angle: -0.105, //~6 degrees
               child: Opacity(
                 opacity: 0.85,
                 child: Consumer<AppState>(
                   builder: (context, state, _) {
-                    // Take up to 6 trending titles; fill remaining slots with placeholders
+                    //Take up to 6 trending titles; fill remaining slots with placeholders
                     final movies = state.trendingMovies.take(6).toList();
                     final placeholderCount = 6 - movies.length;
 
@@ -41,7 +39,6 @@ class OnboardingScreen extends StatelessWidget {
                       childAspectRatio: 110 / 165,
                       physics: const NeverScrollableScrollPhysics(),
                       children: [
-                        // Real movie posters from the trending API response
                         ...movies.asMap().entries.map((e) =>
                           Transform.translate(
                             offset: Offset(0, (e.key % 2) * 30.0),
@@ -49,7 +46,6 @@ class OnboardingScreen extends StatelessWidget {
                                 movie: e.value, width: 110, height: 165),
                           ),
                         ),
-                        // Shimmer-like placeholder cards while the API loads
                         ...List.generate(placeholderCount, (i) =>
                           Transform.translate(
                             offset: Offset(0, ((movies.length + i) % 2) * 30.0),
@@ -64,7 +60,6 @@ class OnboardingScreen extends StatelessWidget {
             ),
           ),
 
-          // ── Vignette gradient ──────────────────────────────────────────────────
           Positioned.fill(
             child: DecoratedBox(
               decoration: BoxDecoration(
@@ -83,7 +78,6 @@ class OnboardingScreen extends StatelessWidget {
             ),
           ),
 
-          // ── Content ────────────────────────────────────────────────────────────
           Positioned(
             left: 0,
             right: 0,
@@ -93,20 +87,18 @@ class OnboardingScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Logo row
                   Row(
                     children: [
-                      _MarqueeLogo(),
+                      _KuvacultLogo(),
                       const SizedBox(width: 8),
                       Text(
-                        'MARQUEE',
+                        'KUVACULT',
                         style: MT.mono(size: 11, color: MC.mute, letterSpacing: 3),
                       ),
                     ],
                   ),
                   const SizedBox(height: 20),
 
-                  // Headline
                   RichText(
                     text: TextSpan(
                       style: MT.display(size: 40, letterSpacing: -1.2),
@@ -146,18 +138,12 @@ class OnboardingScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 32),
 
-                  // Start room button
                   _PrimaryButton(
                     label: 'Start a new room',
                     onTap: () => _onStart(context),
                   ),
                   const SizedBox(height: 10),
 
-                  // Join room button
-                  _GhostButton(
-                    label: 'Join with a code',
-                    onTap: () => _onJoin(context),
-                  ),
                   const SizedBox(height: 20),
 
                   Center(
@@ -243,12 +229,9 @@ class OnboardingScreen extends StatelessWidget {
   }
 }
 
-// ─── Placeholder poster shown while trending API call is in-flight ─────────────
 class _PlaceholderPoster extends StatelessWidget {
   final int index;
   const _PlaceholderPoster({required this.index});
-
-  // Cycles through a few muted gradients so the placeholder collage looks intentional
   static const _gradients = [
     [Color(0xFF1A1A2E), Color(0xFF16213E)],
     [Color(0xFF0D1B2A), Color(0xFF1B2838)],
@@ -273,8 +256,7 @@ class _PlaceholderPoster extends StatelessWidget {
   }
 }
 
-// ─── Marquee logo mark ─────────────────────────────────────────────────────────
-class _MarqueeLogo extends StatelessWidget {
+class _KuvacultLogo extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
@@ -320,7 +302,6 @@ class _LogoPainter extends CustomPainter {
   bool shouldRepaint(_) => false;
 }
 
-// ─── Button components ──────────────────────────────────────────────────────────
 class _PrimaryButton extends StatelessWidget {
   final String label;
   final VoidCallback onTap;

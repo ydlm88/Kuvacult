@@ -1,3 +1,4 @@
+// tag.dart — Renders a small genre/category label as a pill badge with filled or outlined style.
 import 'package:flutter/material.dart';
 import '../theme.dart';
 

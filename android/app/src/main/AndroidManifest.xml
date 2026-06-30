@@ -8,7 +8,7 @@
         android:maxSdkVersion="32"/>
 
     <application
-        android:label="marquee"
+        android:label="kuvacult"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -33,7 +33,7 @@
                  via manifest merger using auth0Domain and auth0Scheme from build.gradle.kts.
                  Do NOT add a manual intent filter here — it causes a merger conflict.
                  Allowed Callback URL to register in Auth0 Dashboard:
-                 com.example.marquee://dev-wdn5ybqovbac1hkc.us.auth0.com/android/com.example.marquee/callback
+                 com.example.kuvacult://dev-wdn5ybqovbac1hkc.us.auth0.com/android/com.example.kuvacult/callback
             -->
         </activity>
         <!-- Flutter plugin registration -->

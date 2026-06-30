@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../mock_data.dart';
+import '../stream_constants.dart';
 
 enum BadgeSize { sm, md }
 

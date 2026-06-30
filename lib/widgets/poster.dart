@@ -1,3 +1,5 @@
+// poster.dart — Movie poster widget that shows a network image or a styled typographic gradient fallback.
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models.dart';
@@ -16,7 +18,7 @@ class PosterWidget extends StatelessWidget {
     this.extraDecoration,
   });
 
-  
+
   @override
   Widget build(BuildContext context) {
     final imageUrl = movie.poster.imageUrl;
@@ -24,20 +26,17 @@ class PosterWidget extends StatelessWidget {
     if (imageUrl != null) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(6),
-        child: Image.network(
-          imageUrl,
+        child: CachedNetworkImage(
+          imageUrl: imageUrl,
           width: width,
           height: height,
           fit: BoxFit.cover,
-          // Decode at 2× logical size to limit memory. Skip when the widget is
-          // sized by its parent (double.infinity) — .toInt() would throw there.
-          cacheWidth: width.isFinite ? (width * 2).toInt() : null,
-          cacheHeight: height.isFinite ? (height * 2).toInt() : null,
-          errorBuilder: (_, __, ___) => _buildGradientPoster(context),
-          loadingBuilder: (_, child, progress) {
-            if (progress == null) return child;
-            return _buildGradientPoster(context);
-          },
+          fadeInDuration: Duration.zero,
+          fadeOutDuration: Duration.zero,
+          memCacheWidth: width.isFinite ? (width * 2).toInt() : null,
+          memCacheHeight: height.isFinite ? (height * 2).toInt() : null,
+          placeholder: (_, __) => _buildGradientPoster(context),
+          errorWidget: (_, __, ___) => _buildGradientPoster(context),
         ),
       );
     }

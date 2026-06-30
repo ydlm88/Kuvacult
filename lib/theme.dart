@@ -2,25 +2,23 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class MC {
-  // Background scale — cinema dark "rich" contrast
   static const Color bg0 = Color(0xFF0A0806);
   static const Color bg1 = Color(0xFF141010);
   static const Color bg2 = Color(0xFF1F1814);
 
-  // Text / ink
+  //Text
   static const Color ink = Color(0xFFF4ECDE);
-  static const Color mute = Color(0x8CF4ECDE); // ~55% opacity
-  static const Color dim = Color(0x4DF4ECDE);  // ~30% opacity
-  static const Color line = Color(0x14F4ECDE); // ~8% opacity
+  static const Color mute = Color(0x8CF4ECDE); 
+  static const Color dim = Color(0x4DF4ECDE);  
+  static const Color line = Color(0x14F4ECDE); 
 
-  // Marquee Amber accent
+  //Kuvacult accent
   static const Color accent1 = Color(0xFFF6C453);
   static const Color accent2 = Color(0xFFE8A93A);
   static const Color accentInk = Color(0xFF1A1206);
 
-  // Marquee community score — teal, complementary to amber on dark background
-  static const Color marqueeScore = Color(0xFF4EC9D0);
-  static const Color marqueeScoreInk = Color(0xFF061A1B);
+  static const Color kuvacultScore = Color.fromARGB(255, 211, 89, 44);
+  static const Color kuvacultScoreInk = Color(0xFF061A1B);
 }
 
 class MT {
@@ -109,7 +107,7 @@ class MT {
         height: height ?? 1.0,
       );
 
-  // Monospace label helper
+  //Monospace helper
   static TextStyle mono({
     double size = 10,
     Color? color,

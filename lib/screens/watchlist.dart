@@ -1,3 +1,7 @@
+// watchlist.dart — Displays the active watchlist's movies across Want/Watching/Watched sections with sort, genre filter, grid/list toggle, random pick, and inline invite sheet.
+import 'dart:math';
+
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -23,39 +27,31 @@ class WatchlistScreen extends StatefulWidget {
 class _WatchlistScreenState extends State<WatchlistScreen> {
   WatchSection _section = WatchSection.want;
   final ScrollController _scrollCtrl = ScrollController();
-  int _gridVisibleCount = 12;
-  static const int _gridPageSize = 12;
+  String _movieSearch = '';
+  final _movieSearchCtrl = TextEditingController();
+  int _page = 0;
+  bool _gridView = false;
+  static const int _kPageSize = 15;
 
   @override
   void initState() {
     super.initState();
-    _scrollCtrl.addListener(_onScroll);
   }
 
   @override
   void dispose() {
-    _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
+    _movieSearchCtrl.dispose();
     super.dispose();
-  }
-
-  void _onScroll() {
-    if (_scrollCtrl.position.pixels >=
-        _scrollCtrl.position.maxScrollExtent - 300) {
-      final state = context.read<AppState>();
-      final total = state.moviesForSection(_section).length;
-      if (_gridVisibleCount < total) {
-        setState(() => _gridVisibleCount =
-            (_gridVisibleCount + _gridPageSize).clamp(0, total));
-      }
-    }
   }
 
   void _switchSection(WatchSection s) {
     setState(() {
       _section = s;
-      _gridVisibleCount = _gridPageSize;
+      _movieSearch = '';
+      _page = 0;
     });
+    _movieSearchCtrl.clear();
     _scrollCtrl.jumpTo(0);
   }
 
@@ -64,7 +60,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
     final state = context.watch<AppState>();
     final watchlist = state.activeWatchlist;
 
-    // Guard: if no list is active (shouldn't happen in normal flow), go back
+    // Guard, if no list is active, go back
     if (watchlist == null) {
       return Scaffold(
         backgroundColor: MC.bg0,
@@ -86,9 +82,14 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
       );
     }
 
-    final movies = state.moviesForSection(_section);
-    final isGrid = _section != WatchSection.want;
-
+    final allMovies = state.moviesForSection(_section);
+    final movies = _movieSearch.isEmpty
+        ? allMovies
+        : allMovies
+            .where((m) => m.title
+                .toLowerCase()
+                .contains(_movieSearch.toLowerCase()))
+            .toList();
     return Scaffold(
       backgroundColor: MC.bg0,
       body: CustomScrollView(
@@ -96,20 +97,115 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
         slivers: [
           SliverToBoxAdapter(child: _buildHeader(context, watchlist, state)),
           SliverToBoxAdapter(child: _buildTabs(state)),
-          if (!isGrid) ..._buildWantContent(context, movies)
-          else ..._buildGridContent(context, movies),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: TextField(
+                controller: _movieSearchCtrl,
+                style: const TextStyle(color: MC.ink, fontSize: 13),
+                onChanged: (v) =>
+                    setState(() { _movieSearch = v; _page = 0; }),
+                decoration: InputDecoration(
+                  hintText: 'Search movies…',
+                  hintStyle: const TextStyle(color: MC.dim, fontSize: 13),
+                  prefixIcon: const Icon(
+                      Icons.search_rounded, color: MC.dim, size: 18),
+                  suffixIcon: _movieSearch.isNotEmpty
+                      ? GestureDetector(
+                          onTap: () {
+                            setState(() { _movieSearch = ''; _page = 0; });
+                            _movieSearchCtrl.clear();
+                          },
+                          child: const Icon(Icons.close_rounded,
+                              color: MC.dim, size: 16),
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: MC.bg1,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide:
+                        const BorderSide(color: MC.line, width: 0.5),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide:
+                        const BorderSide(color: MC.line, width: 0.5),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide:
+                        const BorderSide(color: MC.accent1, width: 1),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 10),
+                ),
+              ),
+            ),
+          ),
+          if (_gridView)
+            ..._buildGridContent(context, movies)
+          else if (_section == WatchSection.want)
+            ..._buildWantContent(context, movies)
+          else
+            ..._buildListContent(context, movies),
           const SliverToBoxAdapter(child: SizedBox(height: 120)),
         ],
       ),
     );
   }
 
+  SliverToBoxAdapter _buildNoResultsSliver() => const SliverToBoxAdapter(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(20, 40, 20, 0),
+          child: Center(
+            child: Text('No movies match your search',
+                style: TextStyle(color: MC.dim, fontSize: 13)),
+          ),
+        ),
+      );
+
   List<Widget> _buildWantContent(BuildContext context, List<Movie> movies) {
-    final featured = movies.isNotEmpty ? movies.first : null;
+    if (movies.isEmpty) {
+      return [_movieSearch.isNotEmpty
+          ? _buildNoResultsSliver()
+          : SliverToBoxAdapter(child: _buildEmptyState())];
+    }
+
+    // When searching, skip the featured card and show a flat paginated list
+    if (_movieSearch.isNotEmpty) {
+      final pageCount = (movies.length / _kPageSize).ceil();
+      final page = _page.clamp(0, pageCount - 1);
+      final pageMovies =
+          movies.skip(page * _kPageSize).take(_kPageSize).toList();
+      return [
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (ctx, i) => Column(
+              children: [
+                WatchRow(
+                  movie: pageMovies[i],
+                  onTap: () => _openDetail(context, pageMovies[i]),
+                ),
+                if (i < pageMovies.length - 1)
+                  Divider(color: MC.line, height: 0.5, thickness: 0.5),
+              ],
+            ),
+            childCount: pageMovies.length,
+          ),
+        ),
+        if (pageCount > 1) _buildPaginationSliver(page, pageCount),
+      ];
+    }
+
+    // Default: featured hero + paginated rest of queue
+    final featured = movies.first;
     final rest = movies.length > 1 ? movies.sublist(1) : <Movie>[];
+    final pageCount = rest.isEmpty ? 0 : (rest.length / _kPageSize).ceil();
+    final page = pageCount == 0 ? 0 : _page.clamp(0, pageCount - 1);
+    final pageMovies = rest.skip(page * _kPageSize).take(_kPageSize).toList();
     return [
-      if (featured != null)
-        SliverToBoxAdapter(child: _buildFeatured(context, featured)),
+      SliverToBoxAdapter(child: _buildFeatured(context, featured)),
       if (rest.isNotEmpty) ...[
         SliverToBoxAdapter(
           child: Padding(
@@ -125,64 +221,139 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
             (ctx, i) => Column(
               children: [
                 WatchRow(
-                  movie: rest[i],
-                  onTap: () => _openDetail(context, rest[i]),
+                  movie: pageMovies[i],
+                  onTap: () => _openDetail(context, pageMovies[i]),
                 ),
-                if (i < rest.length - 1)
+                if (i < pageMovies.length - 1)
                   Divider(color: MC.line, height: 0.5, thickness: 0.5),
               ],
             ),
-            childCount: rest.length,
+            childCount: pageMovies.length,
           ),
         ),
+        if (pageCount > 1) _buildPaginationSliver(page, pageCount),
       ],
-      if (movies.isEmpty)
-        SliverToBoxAdapter(child: _buildEmptyState()),
+    ];
+  }
+
+  List<Widget> _buildListContent(BuildContext context, List<Movie> movies) {
+    if (movies.isEmpty) {
+      return [_movieSearch.isNotEmpty
+          ? _buildNoResultsSliver()
+          : SliverToBoxAdapter(child: _buildEmptyState())];
+    }
+    final pageCount = (movies.length / _kPageSize).ceil();
+    final page = _page.clamp(0, pageCount - 1);
+    final pageMovies = movies.skip(page * _kPageSize).take(_kPageSize).toList();
+    return [
+      SliverList(
+        delegate: SliverChildBuilderDelegate(
+          (ctx, i) => Column(
+            children: [
+              WatchRow(
+                movie: pageMovies[i],
+                onTap: () => _openDetail(context, pageMovies[i]),
+              ),
+              if (i < pageMovies.length - 1)
+                Divider(color: MC.line, height: 0.5, thickness: 0.5),
+            ],
+          ),
+          childCount: pageMovies.length,
+        ),
+      ),
+      if (pageCount > 1) _buildPaginationSliver(page, pageCount),
     ];
   }
 
   List<Widget> _buildGridContent(BuildContext context, List<Movie> movies) {
-    final visibleCount = _gridVisibleCount.clamp(0, movies.length);
+    if (movies.isEmpty) {
+      return [_movieSearch.isNotEmpty
+          ? _buildNoResultsSliver()
+          : SliverToBoxAdapter(child: _buildEmptyState())];
+    }
+    final pageCount = (movies.length / _kPageSize).ceil();
+    final page = _page.clamp(0, pageCount - 1);
+    final pageMovies =
+        movies.skip(page * _kPageSize).take(_kPageSize).toList();
     return [
-      if (movies.isEmpty)
-        SliverToBoxAdapter(child: _buildEmptyState())
-      else ...[
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-          sliver: SliverGrid(
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 12,
-              childAspectRatio: 0.62,
-            ),
-            delegate: SliverChildBuilderDelegate(
-              (ctx, i) => RepaintBoundary(
-                child: _PosterGridCell(
-                  movie: movies[i],
-                  onTap: () => _openDetail(context, movies[i]),
-                ),
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+        sliver: SliverGrid(
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: (MediaQuery.of(context).size.width / 180).floor().clamp(3, 8),
+            crossAxisSpacing: 8,
+            mainAxisSpacing: 12,
+            childAspectRatio: 0.62,
+          ),
+          delegate: SliverChildBuilderDelegate(
+            (ctx, i) => RepaintBoundary(
+              child: _PosterGridCell(
+                movie: pageMovies[i],
+                onTap: () => _openDetail(context, pageMovies[i]),
               ),
-              childCount: visibleCount,
-              addAutomaticKeepAlives: false,
-              addRepaintBoundaries: false,
             ),
+            childCount: pageMovies.length,
+            addAutomaticKeepAlives: false,
+            addRepaintBoundaries: false,
           ),
         ),
-        if (visibleCount < movies.length)
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 20),
-              child: Center(
-                child: Text(
-                  '${movies.length - visibleCount} more',
-                  style: MT.mono(size: 10, letterSpacing: 1, color: MC.dim),
+      ),
+      if (pageCount > 1) _buildPaginationSliver(page, pageCount),
+    ];
+  }
+
+  Widget _buildPaginationSliver(int page, int pageCount) {
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            GestureDetector(
+              onTap: page > 0
+                  ? () => setState(() => _page = page - 1)
+                  : null,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: page > 0 ? MC.bg1 : MC.bg0,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: MC.line, width: 0.5),
                 ),
+                child: Text('← Prev',
+                    style: TextStyle(
+                        color: page > 0 ? MC.ink : MC.dim, fontSize: 12)),
               ),
             ),
-          ),
-      ],
-    ];
+            const SizedBox(width: 12),
+            Text(
+              '${page + 1} / $pageCount',
+              style: MT.mono(size: 11, letterSpacing: 0.5, color: MC.mute),
+            ),
+            const SizedBox(width: 12),
+            GestureDetector(
+              onTap: page < pageCount - 1
+                  ? () => setState(() => _page = page + 1)
+                  : null,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: page < pageCount - 1 ? MC.bg1 : MC.bg0,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: MC.line, width: 0.5),
+                ),
+                child: Text('Next →',
+                    style: TextStyle(
+                        color: page < pageCount - 1 ? MC.ink : MC.dim,
+                        fontSize: 12)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildEmptyState() {
@@ -212,12 +383,15 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
   }
 
   Widget _buildHeader(BuildContext context, Watchlist watchlist, AppState state) {
+    final isOwner = state.currentUser != null &&
+        watchlist.memberIds.isNotEmpty &&
+        watchlist.memberIds[0] == state.currentUser!.id;
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 58, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Back + invite row
           Row(
             children: [
               GestureDetector(
@@ -235,7 +409,6 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
                 ),
               ),
               const Spacer(),
-              // Member avatars
               Row(
                 children: watchlist.memberIds.asMap().entries.map((e) {
                   return Transform.translate(
@@ -246,7 +419,6 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
                 }).toList(),
               ),
               const SizedBox(width: 4),
-              // Invite button
               GestureDetector(
                 onTap: () => _showInviteSheet(context, watchlist),
                 child: Container(
@@ -269,10 +441,24 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
                   ),
                 ),
               ),
+              if (!isOwner) ...[
+                const SizedBox(width: 6),
+                GestureDetector(
+                  onTap: () => _confirmLeave(context, watchlist, state),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.redAccent.withAlpha(80), width: 0.5),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text('Leave',
+                        style: MT.mono(size: 10, letterSpacing: 1, color: Colors.redAccent)),
+                  ),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 16),
-          // Title block
           Text(
             watchlist.listKey.isNotEmpty
                 ? '${watchlist.name}  ·  ${watchlist.listKey}'
@@ -299,16 +485,44 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
     );
   }
 
+  void _confirmLeave(BuildContext context, Watchlist watchlist, AppState state) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: MC.bg1,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Leave "${watchlist.name}"?',
+            style: const TextStyle(color: MC.ink)),
+        content: const Text(
+          'You will be removed from this list. The list stays for other members.',
+          style: TextStyle(color: MC.mute, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: MC.mute)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.pop(context); // pop the watchlist detail screen
+              state.leaveWatchlist(watchlist.id);
+            },
+            child: const Text('Leave', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTabs(AppState state) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Sort/filter row
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
           child: Row(
             children: [
-              // Genre filter
               GestureDetector(
                 onTap: () => _showFilterSheet(context, state),
                 child: Container(
@@ -331,7 +545,6 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
                 ),
               ),
               const SizedBox(width: 8),
-              // Sort order
               GestureDetector(
                 onTap: () => _showSortSheet(context, state),
                 child: Container(
@@ -353,10 +566,44 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
                   ),
                 ),
               ),
+              const Spacer(),
+              // Randomizer — picks a random Want movie and promotes it to top pick
+              GestureDetector(
+                onTap: () => _randomizePick(context, state),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: MC.accent1.withAlpha(120), width: 0.5),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.casino_rounded, color: MC.accent1, size: 14),
+                      const SizedBox(width: 4),
+                      Text('Random Pick', style: const TextStyle(color: MC.accent1, fontSize: 12)),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () => setState(() { _gridView = !_gridView; _page = 0; }),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: MC.line, width: 0.5),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    _gridView ? Icons.view_list_rounded : Icons.grid_view_rounded,
+                    color: MC.mute, size: 14,
+                  ),
+                ),
+              ),
             ],
           ),
         ),
-        // Section tabs
         Container(
           decoration: BoxDecoration(
             border: Border(bottom: BorderSide(color: MC.line, width: 0.5)),
@@ -423,10 +670,12 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
             // Background poster image (when available)
             if (featured.poster.imageUrl != null)
               Positioned.fill(
-                child: Image.network(
-                  featured.poster.imageUrl!,
+                child: CachedNetworkImage(
+                  imageUrl: featured.poster.imageUrl!,
                   fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                  width: double.infinity,
+                  height: double.infinity,
+                  errorWidget: (_, __, ___) => const SizedBox.shrink(),
                 ),
               ),
             // Poster overlay gradient — stronger over image so text stays readable
@@ -512,6 +761,28 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
     );
   }
 
+  void _randomizePick(BuildContext context, AppState state) {
+    final wantMovies = (state.activeWatchlist?.movies ?? [])
+        .where((m) => m.section == WatchSection.want)
+        .toList();
+    if (wantMovies.isEmpty) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(SnackBar(
+          content: const Text('No movies in Want to Watch',
+              style: TextStyle(color: MC.ink, fontSize: 13)),
+          backgroundColor: MC.bg1,
+          behavior: SnackBarBehavior.fixed,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          duration: const Duration(seconds: 2),
+        ));
+      return;
+    }
+    final movie = wantMovies[Random().nextInt(wantMovies.length)];
+    state.promoteToTopPickAndSync(movie.id);
+    if (_section != WatchSection.want) _switchSection(WatchSection.want);
+  }
+
   void _openDetail(BuildContext context, Movie movie) {
     Navigator.push(
       context,
@@ -519,7 +790,6 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
     );
   }
 
-  // ─── Sort bottom sheet ─────────────────────────────────────────────────────
   // TODO(algorithm): Sorting is currently done client-side on mock data.
   // When connected to API, delegate sort to server: GET /watchlists/:id/movies?sort=rating&dir=desc
   void _showSortSheet(BuildContext context, AppState state) {
@@ -562,7 +832,6 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
     );
   }
 
-  // ─── Filter bottom sheet ───────────────────────────────────────────────────
   // TODO(algorithm): Genre filtering is client-side. For large lists, push filters to API.
   // GET /watchlists/:id/movies?genre=Drama&section=want
   void _showFilterSheet(BuildContext context, AppState state) {
@@ -670,7 +939,7 @@ class _InviteSheetInlineState extends State<_InviteSheetInline> {
     });
     ScaffoldMessenger.of(widget.parentContext).showSnackBar(
       SnackBar(
-        content: Text('${user.displayName} added to list',
+        content: Text('Invite sent to ${user.displayName}',
             style: const TextStyle(color: MC.ink, fontSize: 13)),
         backgroundColor: MC.bg1,
         behavior: SnackBarBehavior.floating,
@@ -704,7 +973,7 @@ class _InviteSheetInlineState extends State<_InviteSheetInline> {
           const SizedBox(height: 20),
           Text('Invite to ${watchlist.name}', style: MT.display(size: 22)),
           const SizedBox(height: 4),
-          const Text('Share this code to invite collaborators',
+          const Text('They\'ll receive an invite to accept or decline',
               style: TextStyle(color: MC.mute, fontSize: 13)),
           const SizedBox(height: 20),
           GestureDetector(
@@ -831,7 +1100,7 @@ class _InviteSheetInlineState extends State<_InviteSheetInline> {
                             color: MC.accent1,
                             borderRadius: BorderRadius.circular(10),
                           ),
-                          child: const Text('Add',
+                          child: const Text('Invite',
                               style: TextStyle(color: MC.accentInk, fontSize: 12,
                                   fontWeight: FontWeight.w600)),
                         ),
@@ -847,7 +1116,6 @@ class _InviteSheetInlineState extends State<_InviteSheetInline> {
   }
 }
 
-// ─── Poster grid cell (used in watching / watched tabs) ───────────────────────
 class _PosterGridCell extends StatelessWidget {
   final Movie movie;
   final VoidCallback onTap;

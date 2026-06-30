@@ -1,4 +1,4 @@
-package com.example.marquee
+package com.example.kuvacult
 
 import io.flutter.embedding.android.FlutterActivity
 

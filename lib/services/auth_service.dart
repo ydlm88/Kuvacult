@@ -1,156 +1,224 @@
+// auth_service.dart — Handles registration, login, token refresh, and secure JWT storage; defines typed exceptions so callers can show appropriate UI without parsing raw error strings.
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
-import 'package:auth0_flutter/auth0_flutter.dart';
-import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart';
-import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/http.dart' show ClientException;
+import '../config.dart';
 
-const _kDomain    = 'dev-wdn5ybqovbac1hkc.us.auth0.com';
-const _kClientId  = 'LZSv9ZIB3V4Jork3OJb7VRNuoYpEDnIq';
-const _kScheme    = 'com.example.marquee';
-
-// Auth0 Dashboard → Allowed Callback URLs must include: http://localhost:4823
-// Auth0 Dashboard → Allowed Logout URLs must include:   http://localhost:4823
-const _kDesktopPort     = 4823;
-const _kDesktopRedirect = 'http://localhost:$_kDesktopPort';
-
-/// Platform-agnostic auth result — decouples app logic from auth0_flutter's Credentials type.
 class AuthResult {
-  final String sub;
-  final String name;
-  final String? nickname;
-  final String? email;
+  final String userId;
+  final String username;
+  final String email;
+  final String displayName;
+  final String? avatarUrl;
+  final String? roomKey;
+  final List<String> friendIds;
+
   const AuthResult({
-    required this.sub,
-    required this.name,
-    this.nickname,
-    this.email,
+    required this.userId,
+    required this.username,
+    required this.email,
+    required this.displayName,
+    this.avatarUrl,
+    this.roomKey,
+    this.friendIds = const [],
   });
 }
 
 class AuthService {
-  final _auth0 = Auth0(_kDomain, _kClientId);
+  static String get _base => Config.httpBase;
 
-  // auth0_flutter doesn't support Windows or Linux — use PKCE flow there instead.
-  bool get _isDesktop => !kIsWeb && (Platform.isWindows || Platform.isLinux);
+  static const _timeout = Duration(seconds: 10);
+  static const _storage = FlutterSecureStorage();
 
-  Future<AuthResult> login() async {
-    if (_isDesktop) return _desktopLogin();
-    final creds = await _auth0
-        .webAuthentication(scheme: _kScheme)
-        .login(parameters: {'prompt': 'select_account'});
-    return _fromCredentials(creds);
-  }
+  static const _kAccessToken  = 'access_token';
+  static const _kRefreshToken = 'refresh_token';
+  static const _kUserId       = 'user_id';
 
-  Future<void> logout() async {
-    if (_isDesktop) return; // desktop sessions are in-memory only for now
+  Future<({AuthResult result, String accessToken, String refreshToken})> login({
+    required String email,
+    required String password,
+  }) async {
     try {
-      await _auth0.webAuthentication(scheme: _kScheme).logout();
+      final res = await http.post(
+        Uri.parse('$_base/auth/login'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'email': email, 'password': password}),
+      ).timeout(_timeout);
+
+      Map<String, dynamic> body;
+      try {
+        body = jsonDecode(res.body) as Map<String, dynamic>;
+      } on FormatException {
+        throw const AuthException('Server is unreachable. Please try again shortly.');
+      }
+      if (res.statusCode == 403) {
+        if ((body['code'] as String?) == 'email_not_verified') {
+          throw const EmailNotVerifiedException();
+        }
+        throw AuthException(body['error'] as String? ?? 'Forbidden');
+      }
+      if (res.statusCode != 200) {
+        throw AuthException(body['error'] as String? ?? 'Login failed');
+      }
+      return (
+        result: _resultFromBody(body),
+        accessToken: body['accessToken'] as String,
+        refreshToken: body['refreshToken'] as String,
+      );
+    } on AuthException {
+      rethrow;
+    } on SocketException {
+      throw const AuthException('Cannot reach server. Is it running?');
+    } on ClientException {
+      throw const AuthException('Cannot reach server. Is it running?');
+    } on TimeoutException {
+      throw const AuthException('Server took too long to respond.');
     } catch (e) {
-      debugPrint('Auth0 logout: $e');
+      throw AuthException('Login error: $e');
     }
   }
 
-  Future<AuthResult?> getStoredCredentials() async {
-    if (_isDesktop) return null; // no persistent token store on desktop yet
+  // Returns the backend's confirmation message (e.g. "Check your email…").
+  // Throws AuthException on failure.
+  Future<String> register({
+    required String username,
+    required String email,
+    required String password,
+    required String displayName,
+  }) async {
     try {
-      if (!await _auth0.credentialsManager.hasValidCredentials()) return null;
-      return _fromCredentials(await _auth0.credentialsManager.credentials());
+      final res = await http.post(
+        Uri.parse('$_base/auth/register'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'username': username,
+          'email': email,
+          'password': password,
+          'displayName': displayName,
+        }),
+      ).timeout(_timeout);
+
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      if (res.statusCode != 201) {
+        throw AuthException(body['error'] as String? ?? 'Registration failed');
+      }
+      return body['message'] as String? ?? 'Account created. Check your email to verify.';
+    } on AuthException {
+      rethrow;
+    } on SocketException {
+      throw const AuthException('Cannot reach server. Is it running?');
+    } on ClientException {
+      throw const AuthException('Cannot reach server. Is it running?');
+    } on TimeoutException {
+      throw const AuthException('Server took too long to respond.');
+    } catch (e) {
+      throw AuthException('Registration error: $e');
+    }
+  }
+
+  // Always resolves without throwing, backend never reveals whether the email exists.
+  Future<void> forgotPassword(String email) async {
+    try {
+      await http.post(
+        Uri.parse('$_base/auth/forgot-password'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'email': email}),
+      ).timeout(_timeout);
+    } catch (_) {}
+  }
+
+  Future<void> resendVerification(String email) async {
+    try {
+      await http.post(
+        Uri.parse('$_base/auth/resend-verification'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'email': email}),
+      ).timeout(_timeout);
+    } catch (_) {}
+  }
+
+  Future<String?> refreshAccessToken(String refreshToken) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$_base/auth/refresh'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'refreshToken': refreshToken}),
+      ).timeout(_timeout);
+      if (res.statusCode != 200) return null;
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      return body['accessToken'] as String?;
     } catch (_) {
       return null;
     }
   }
 
-  Future<void> clearStoredCredentials() async {
-    if (_isDesktop) return;
+  Future<void> logout(String refreshToken) async {
     try {
-      await _auth0.credentialsManager.clearCredentials();
+      await http.post(
+        Uri.parse('$_base/auth/logout'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'refreshToken': refreshToken}),
+      ).timeout(_timeout);
     } catch (_) {}
   }
 
-  // ── Desktop PKCE flow (Windows / Linux) ──────────────────────────────────────
-  // flutter_web_auth_2 opens the system browser and intercepts the localhost
-  // redirect on port _kDesktopPort via a short-lived local HTTP server.
+  Future<void> storeSession({
+    required String accessToken,
+    required String refreshToken,
+    required String userId,
+  }) async {
+    await _storage.write(key: _kAccessToken,  value: accessToken);
+    await _storage.write(key: _kRefreshToken, value: refreshToken);
+    await _storage.write(key: _kUserId,       value: userId);
+  }
 
-  Future<AuthResult> _desktopLogin() async {
-    final verifier  = _generateVerifier();
-    final challenge = _generateChallenge(verifier);
+  Future<({String accessToken, String refreshToken, String userId})?> getStoredSession() async {
+    final accessToken  = await _storage.read(key: _kAccessToken);
+    final refreshToken = await _storage.read(key: _kRefreshToken);
+    final userId       = await _storage.read(key: _kUserId);
+    if (accessToken == null || refreshToken == null || userId == null) return null;
+    return (accessToken: accessToken, refreshToken: refreshToken, userId: userId);
+  }
 
-    final authUri = Uri.https(_kDomain, '/authorize', {
-      'client_id':             _kClientId,
-      'response_type':         'code',
-      'redirect_uri':          _kDesktopRedirect,
-      'scope':                 'openid profile email offline_access',
-      'code_challenge':        challenge,
-      'code_challenge_method': 'S256',
-      'prompt':                'select_account',
-    });
+  Future<void> clearSession() async {
+    await _storage.delete(key: _kAccessToken);
+    await _storage.delete(key: _kRefreshToken);
+    await _storage.delete(key: _kUserId);
+  }
 
-    // callbackUrlScheme must be the full http://localhost:{port} URL in v4 server mode.
-    // useWebview: false opens Auth0 in the system browser (not an embedded webview),
-    // then captures the redirect via a short-lived local HTTP server on _kDesktopPort.
-    final result = await FlutterWebAuth2.authenticate(
-      url: authUri.toString(),
-      callbackUrlScheme: _kDesktopRedirect,
-      options: const FlutterWebAuth2Options(useWebview: false),
-    );
-
-    final code = Uri.parse(result).queryParameters['code'];
-    if (code == null) throw Exception('No authorisation code returned');
-
-    final tokenRes = await http.post(
-      Uri.https(_kDomain, '/oauth/token'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'grant_type':    'authorization_code',
-        'client_id':     _kClientId,
-        'code_verifier': verifier,
-        'code':          code,
-        'redirect_uri':  _kDesktopRedirect,
-      }),
-    );
-
-    if (tokenRes.statusCode != 200) {
-      throw Exception('Token exchange failed (${tokenRes.statusCode})');
-    }
-
-    final tokens = jsonDecode(tokenRes.body) as Map<String, dynamic>;
-    final claims = _decodeJwt(tokens['id_token'] as String);
-
+  static AuthResult _resultFromBody(Map<String, dynamic> body) {
+    final u = body['user'] as Map<String, dynamic>? ?? body;
     return AuthResult(
-      sub:      claims['sub'] as String,
-      name:     (claims['name'] ?? claims['sub']) as String,
-      nickname: claims['nickname'] as String?,
-      email:    claims['email'] as String?,
+      userId:      u['id']          as String,
+      username:    u['username']    as String,
+      email:       u['email']       as String? ?? '',
+      displayName: u['displayName'] as String? ?? u['username'] as String,
+      avatarUrl:   u['avatarUrl']   as String?,
+      roomKey:     u['roomKey']     as String?,
+      friendIds:   (u['friendIds'] as List? ?? []).cast<String>(),
     );
   }
+}
 
-  // ── Helpers ───────────────────────────────────────────────────────────────────
+class AuthException implements Exception {
+  final String message;
+  const AuthException(this.message);
 
-  static AuthResult _fromCredentials(Credentials c) => AuthResult(
-        sub:      c.user.sub,
-        name:     c.user.name ?? c.user.sub,
-        nickname: c.user.nickname,
-        email:    c.user.email,
-      );
+  @override
+  String toString() => message;
+}
 
-  static String _generateVerifier() {
-    final rng = Random.secure();
-    return base64Url
-        .encode(List<int>.generate(32, (_) => rng.nextInt(256)))
-        .replaceAll('=', '');
-  }
+// Thrown when the user registered successfully but needs email verification.
+// Carries the message from the backend to display to the user.
+class RegistrationPendingException extends AuthException {
+  const RegistrationPendingException(super.message);
+}
 
-  static String _generateChallenge(String verifier) => base64Url
-      .encode(sha256.convert(utf8.encode(verifier)).bytes)
-      .replaceAll('=', '');
-
-  static Map<String, dynamic> _decodeJwt(String token) {
-    final payload = token.split('.')[1];
-    return jsonDecode(
-      utf8.decode(base64Url.decode(base64Url.normalize(payload))),
-    ) as Map<String, dynamic>;
-  }
+// Thrown when login is blocked because the email is not yet verified.
+class EmailNotVerifiedException extends AuthException {
+  const EmailNotVerifiedException()
+      : super('Please verify your email before logging in.');
 }

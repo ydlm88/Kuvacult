@@ -1,22 +1,31 @@
+// user_notification_service.dart — Dedicated per-user WebSocket channel for app-level notifications; connects with userId query param and auto-reconnects on drop.
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import '../config.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-// Dedicated per-user WebSocket channel for app-level notifications (veto invites, etc.)
-// Connects with ws://host:port?userId=<auth0Sub>
 class UserNotificationService {
-  static String get _wsBase =>
-      Platform.isAndroid ? 'ws://10.0.2.2:3000' : 'ws://localhost:3000';
+  static String get _wsBase => Config.wsBase;
 
   WebSocketChannel? _channel;
   final _controller = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get events => _controller.stream;
 
+  String? _userId;
+  Timer? _reconnectTimer;
+  bool _disposed = false;
+
   void connect(String userId) {
+    _userId = userId;
+    _reconnectTimer?.cancel();
+    _doConnect();
+  }
+
+  void _doConnect() {
+    if (_disposed || _userId == null) return;
     _channel?.sink.close();
     _channel = WebSocketChannel.connect(
-      Uri.parse('$_wsBase?userId=${Uri.encodeQueryComponent(userId)}'),
+      Uri.parse('$_wsBase?userId=${Uri.encodeQueryComponent(_userId!)}'),
     );
     _channel!.stream.listen(
       (raw) {
@@ -25,18 +34,27 @@ class UserNotificationService {
           _controller.add(msg);
         } catch (_) {}
       },
-      onError: (_) {},
-      onDone: () {},
+      onError: (_) => _scheduleReconnect(),
+      onDone: () => _scheduleReconnect(),
       cancelOnError: false,
     );
   }
 
+  void _scheduleReconnect() {
+    if (_disposed) return;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(const Duration(seconds: 4), _doConnect);
+  }
+
   void disconnect() {
+    _reconnectTimer?.cancel();
     _channel?.sink.close();
     _channel = null;
+    _userId = null;
   }
 
   void dispose() {
+    _disposed = true;
     disconnect();
     _controller.close();
   }

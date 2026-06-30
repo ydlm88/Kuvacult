@@ -1,7 +1,7 @@
+// star_rating.dart — Read-only star display and interactive half-star rating input widget.
 import 'package:flutter/material.dart';
 import '../theme.dart';
 
-// Read-only star display — supports half-star values (e.g. 3.5)
 class StarDisplay extends StatelessWidget {
   final double value;
   final int max;
@@ -40,7 +40,6 @@ class StarDisplay extends StatelessWidget {
   }
 }
 
-// Interactive half-star rating input — tap left half of a star for 0.5, right for 1.0
 class StarRatingInput extends StatefulWidget {
   final double initialValue;
   final int max;

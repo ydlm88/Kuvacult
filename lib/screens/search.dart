@@ -18,7 +18,7 @@ class SearchScreen extends StatefulWidget {
   State<SearchScreen> createState() => _SearchScreenState();
 }
 
-// Predefined genre list shown on search screen — always visible, not dependent on watchlist
+// Predefined genre list 
 const _kGenres = [
   'Action', 'Adventure', 'Animation', 'Comedy', 'Crime',
   'Documentary', 'Drama', 'Fantasy', 'Horror', 'Mystery',
@@ -33,9 +33,8 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   void initState() {
     super.initState();
-    // Rebuild when text changes so the clear button and stale-query check stay in sync.
     _ctrl.addListener(_onCtrlChanged);
-    // Retry if trending failed on startup; loadTrending() self-guards concurrent calls.
+    // Retry if trending failed on startup
     final state = context.read<AppState>();
     if (state.trendingMovies.isEmpty) {
       state.loadTrending();
@@ -86,7 +85,6 @@ class _SearchScreenState extends State<SearchScreen> {
         // Cache more of the list off-screen to reduce build stutters during scroll
         cacheExtent: 400,
         slivers: [
-          // ── Header ──────────────────────────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 62, 20, 12),
@@ -102,7 +100,6 @@ class _SearchScreenState extends State<SearchScreen> {
             ),
           ),
 
-          // ── Search input ─────────────────────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
@@ -154,7 +151,6 @@ class _SearchScreenState extends State<SearchScreen> {
             ),
           ),
 
-          // ── Loading spinner — shown while text differs from last searched query
           // (debounce pending) AND during the actual API fetch.
           if (searchLoading || (_ctrl.text.isNotEmpty && _ctrl.text != searchQuery))
             const SliverToBoxAdapter(
@@ -167,8 +163,7 @@ class _SearchScreenState extends State<SearchScreen> {
               ),
             )
 
-          // ── Search results ───────────────────────────────────────────────────
-          // _ctrl.text drives this immediately; state.searchResults populates after debounce
+          //state.searchResults populates after debounce
           else if (_ctrl.text.isNotEmpty) ...[
             if (searchResults.isEmpty)
               const SliverToBoxAdapter(
@@ -200,9 +195,6 @@ class _SearchScreenState extends State<SearchScreen> {
                   ),
                 ),
               ),
-
-              // Result rows — each wrapped in RepaintBoundary so only the changed
-              // row repaints when its queue membership changes.
               SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (ctx, i) => RepaintBoundary(
@@ -223,7 +215,6 @@ class _SearchScreenState extends State<SearchScreen> {
                 ),
               ),
 
-              // ── Pagination controls ────────────────────────────────────────
               if (hasPrev || hasNext)
                 SliverToBoxAdapter(
                   child: Padding(
@@ -300,7 +291,6 @@ class _SearchScreenState extends State<SearchScreen> {
             ],
           ]
 
-          // ── Genre results ────────────────────────────────────────────────────
           else if (selectedGenre != null) ...[
             // Active genre filter header with clear button
             SliverToBoxAdapter(
@@ -372,11 +362,10 @@ class _SearchScreenState extends State<SearchScreen> {
               ),
           ]
 
-          // ── Trending when no search ──────────────────────────────────────────
           else ...[
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(0, 24, 0, 4),
+                padding: const EdgeInsets.fromLTRB(0, 24, 0, 10),
                 child: SectionHeader(title: 'Trending'),
               ),
             ),
@@ -406,7 +395,7 @@ class _SearchScreenState extends State<SearchScreen> {
                         ),
                       )
                     // ScrollConfiguration lets the mouse button drag the list.
-                    // Listener translates mouse-wheel vertical delta → horizontal scroll.
+                    // Listener translates mouse-wheel vertical delta -> horizontal scroll.
                     : ScrollConfiguration(
                   behavior: ScrollConfiguration.of(context).copyWith(
                     dragDevices: {
@@ -466,8 +455,7 @@ class _SearchScreenState extends State<SearchScreen> {
                 ),
               ),
             ),
-
-            // Genre chips — predefined list, always visible
+            // Genre 
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(0, 28, 0, 8),
@@ -519,10 +507,9 @@ class _SearchResultRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // context.select instead of context.watch — this row only rebuilds when THIS
-    // movie's queue membership changes, not on any AppState notification.
+    // Check membership across all watchlists so removed movies re-enable the button.
     final inQueue = context.select<AppState, bool>(
-        (s) => s.allMovies.any((m) => m.id == movie.id));
+        (s) => s.isInAnyQueue(movie.id));
 
     return GestureDetector(
       onTap: onTap,

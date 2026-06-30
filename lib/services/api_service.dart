@@ -1,14 +1,25 @@
+// api_service.dart — Thin HTTP client wrapping the Kuvacult REST API; all methods are static and throw ApiException on non-2xx responses.
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
+import '../config.dart';
 
 class ApiService {
-  // Android emulator routes localhost through 10.0.2.2; every other platform uses localhost directly
-  static final String _base = Platform.isAndroid
-      ? 'http://10.0.2.2:3000'
-      : 'http://localhost:3000';
+  static String get _base => Config.httpBase;
   static const _timeout = Duration(seconds: 10);
+
+  static String? _token;
+  static void setToken(String? t) => _token = t;
+
+  static Map<String, String> _json() => {
+    'Content-Type': 'application/json',
+    if (_token != null) 'Authorization': 'Bearer $_token',
+  };
+
+  // Headers for GET / DELETE requests that need auth but carry no body
+  static Map<String, String>? _auth() =>
+      _token != null ? {'Authorization': 'Bearer $_token'} : null;
 
   static Map<String, dynamic> _decode(http.Response res) {
     final body = jsonDecode(res.body) as Map<String, dynamic>;
@@ -18,60 +29,41 @@ class ApiService {
     return body;
   }
 
-  //Upsert method
-  static Future<Map<String, dynamic>> upsertUser({
-    required String auth0Sub,
-    required String username,
-    required String email,
-    required String displayName,
-  }) async {
-    final res = await http.post(
-      Uri.parse('$_base/users'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'auth0Sub' : auth0Sub,
-        'username' : username,
-        'email' : email,
-        'displayName' : displayName,
-      }),
-    ).timeout(_timeout);
-    return _decode(res);
-  }
 
-  //Roomkey methods
   static Future<bool> checkRoomKey(String key) async {
     final res = await http.get(
       Uri.parse('$_base/users?roomKey=$key'),
+      headers: _auth(),
     ).timeout(_timeout);
     final body = _decode(res);
     return body['exists'] as bool;
   }
 
   static Future<void> saveRoomKey({
-    required String auth0Sub,
+    required String userId,
     required String roomKey,
   }) async {
     final res = await http.patch(
-      Uri.parse('$_base/users/$auth0Sub'),
-      headers: {'Content-Type': 'application/json'},
+      Uri.parse('$_base/users/$userId'),
+      headers: _json(),
       body: jsonEncode({'roomKey': roomKey}),
     ).timeout(_timeout);
     _decode(res);
   }
 
+
   static Future<Map<String, dynamic>> joinRoom({
     required String listKey,
-    required String auth0Sub,
+    required String userId,
   }) async {
     final res = await http.post(
       Uri.parse('$_base/watchlists/join'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'listKey': listKey, 'auth0Sub': auth0Sub}),
+      headers: _json(),
+      body: jsonEncode({'listKey': listKey, 'userId': userId}),
     ).timeout(_timeout);
     return _decode(res);
   }
 
-  // Read-only room lookup — used by guests to view a room without joining as a member
   static Future<Map<String, dynamic>> findRoom({required String listKey}) async {
     final res = await http.get(
       Uri.parse('$_base/watchlists/find?code=${Uri.encodeQueryComponent(listKey)}'),
@@ -79,7 +71,13 @@ class ApiService {
     return _decode(res);
   }
 
-  //CRUD methods
+  static Future<Map<String, dynamic>> fetchWatchlistById(String watchlistId) async {
+    final res = await http.get(
+      Uri.parse('$_base/watchlists/$watchlistId'),
+    ).timeout(_timeout);
+    return _decode(res);
+  }
+
   static Future<Map<String, dynamic>> createWatchlist({
     required String name,
     required String listKey,
@@ -87,7 +85,7 @@ class ApiService {
   }) async {
     final res = await http.post(
       Uri.parse('$_base/watchlists'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _json(),
       body: jsonEncode({'name': name, 'listKey': listKey, 'memberIds': memberIds}),
     ).timeout(_timeout);
     return _decode(res);
@@ -99,7 +97,7 @@ class ApiService {
   }) async {
     final res = await http.patch(
       Uri.parse('$_base/watchlists/$watchlistId/regenerate-key'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _json(),
       body: jsonEncode({'listKey': listKey}),
     ).timeout(_timeout);
     return _decode(res);
@@ -121,7 +119,7 @@ class ApiService {
   }) async {
     final res = await http.post(
       Uri.parse('$_base/watchlists/$watchlistId/movies'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _json(),
       body: jsonEncode({
         'movieId': movieId,
         'title': title,
@@ -141,14 +139,65 @@ class ApiService {
 
   static Future<Map<String, dynamic>> addMemberToWatchlist({
     required String watchlistId,
-    required String auth0Sub,
+    required String userId,
   }) async {
     final res = await http.patch(
       Uri.parse('$_base/watchlists/$watchlistId/members'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'auth0Sub': auth0Sub}),
+      headers: _json(),
+      body: jsonEncode({'userId': userId}),
     ).timeout(_timeout);
     return _decode(res);
+  }
+
+  static Future<Map<String, dynamic>> acceptWatchlistInvite({
+    required String watchlistId,
+    required String inviteId,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$_base/watchlists/$watchlistId/invites/$inviteId/accept'),
+      headers: _json(),
+      body: jsonEncode({}),
+    ).timeout(_timeout);
+    return _decode(res);
+  }
+
+  static Future<void> declineWatchlistInvite({
+    required String watchlistId,
+    required String inviteId,
+  }) async {
+    final res = await http.delete(
+      Uri.parse('$_base/watchlists/$watchlistId/invites/$inviteId'),
+      headers: _auth(),
+    ).timeout(_timeout);
+    _decode(res);
+  }
+
+  static Future<void> leaveWatchlist(String watchlistId) async {
+    final res = await http.delete(
+      Uri.parse('$_base/watchlists/$watchlistId/members'),
+      headers: _auth(),
+    ).timeout(_timeout);
+    _decode(res);
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchPendingInvites(String userId) async {
+    final res = await http.get(
+      Uri.parse('$_base/users/$userId/invites'),
+      headers: _auth(),
+    ).timeout(_timeout);
+    if (res.statusCode >= 400) return [];
+    return (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchSentInvites(String userId) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$_base/users/$userId/sent-invites'),
+        headers: _auth(),
+      ).timeout(_timeout);
+      if (res.statusCode >= 400) return [];
+      return (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
+    } catch (_) { return []; }
   }
 
   static Future<Map<String, dynamic>> renameWatchlist({
@@ -157,7 +206,7 @@ class ApiService {
   }) async {
     final res = await http.patch(
       Uri.parse('$_base/watchlists/$watchlistId'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _json(),
       body: jsonEncode({'name': name}),
     ).timeout(_timeout);
     return _decode(res);
@@ -166,6 +215,7 @@ class ApiService {
   static Future<void> deleteWatchlist(String watchlistId) async {
     final res = await http.delete(
       Uri.parse('$_base/watchlists/$watchlistId'),
+      headers: _auth(),
     ).timeout(_timeout);
     _decode(res);
   }
@@ -179,16 +229,28 @@ class ApiService {
     String? reaction,
   }) async {
     final body = <String, dynamic>{};
-    if (section != null) body['section'] = section;
-    if (memberId != null) body['memberId'] = memberId;
-    if (stars != null) body['stars'] = stars;
-    if (reaction != null) body['reaction'] = reaction;
+    if (section   != null) body['section']   = section;
+    if (memberId  != null) body['memberId']  = memberId;
+    if (stars     != null) body['stars']     = stars;
+    if (reaction  != null) body['reaction']  = reaction;
     final res = await http.patch(
       Uri.parse('$_base/watchlists/$watchlistId/movies/$movieId'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _json(),
       body: jsonEncode(body),
     ).timeout(_timeout);
     return _decode(res);
+  }
+
+  static Future<void> promoteMovie({
+    required String watchlistId,
+    required String movieId,
+    String? promotedBy,
+  }) async {
+    await http.post(
+      Uri.parse('$_base/watchlists/$watchlistId/movies/$movieId/promote'),
+      headers: _json(),
+      body: jsonEncode({'promotedBy': promotedBy}),
+    ).timeout(_timeout);
   }
 
   static Future<void> removeMovie({
@@ -197,6 +259,7 @@ class ApiService {
   }) async {
     final res = await http.delete(
       Uri.parse('$_base/watchlists/$watchlistId/movies/$movieId'),
+      headers: _auth(),
     ).timeout(_timeout);
     _decode(res);
   }
@@ -209,41 +272,39 @@ class ApiService {
   }) async {
     final res = await http.post(
       Uri.parse('$_base/watchlists/$watchlistId/movies/$movieId/notes'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _json(),
       body: jsonEncode({'by': by, 'text': text}),
     ).timeout(_timeout);
     return _decode(res);
   }
 
+
   static Future<Map<String, dynamic>> updateProfile({
-    required String auth0Sub,
+    required String userId,
     String? displayName,
     String? avatarUrl,
   }) async {
     final body = <String, dynamic>{};
     if (displayName != null) body['displayName'] = displayName;
-    if (avatarUrl != null) body['avatarUrl'] = avatarUrl;
+    if (avatarUrl   != null) body['avatarUrl']   = avatarUrl;
     final res = await http.patch(
-      Uri.parse('$_base/users/$auth0Sub'),
-      headers: {'Content-Type': 'application/json'},
+      Uri.parse('$_base/users/$userId'),
+      headers: _json(),
       body: jsonEncode(body),
     ).timeout(_timeout);
     return _decode(res);
   }
 
-  // Uploads a local image file to Firebase Storage via the backend.
-  // Returns the public download URL. Throws on failure.
   static Future<String> uploadAvatar({
-    required String auth0Sub,
+    required String userId,
     required String filePath,
   }) async {
     final Uint8List bytes = await File(filePath).readAsBytes();
-    final String imageBase64 = base64Encode(bytes);
     final ext = filePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
     final res = await http.post(
-      Uri.parse('$_base/users/$auth0Sub/avatar'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'imageBase64': imageBase64, 'mimeType': ext}),
+      Uri.parse('$_base/users/$userId/avatar'),
+      headers: _json(),
+      body: jsonEncode({'imageBase64': base64Encode(bytes), 'mimeType': ext}),
     ).timeout(const Duration(seconds: 30));
     final body = _decode(res);
     return body['avatarUrl'] as String;
@@ -252,6 +313,7 @@ class ApiService {
   static Future<List<Map<String, dynamic>>> searchUsers(String query) async {
     final res = await http.get(
       Uri.parse('$_base/users?q=${Uri.encodeQueryComponent(query)}'),
+      headers: _auth(),
     ).timeout(_timeout);
     if (res.statusCode >= 400) {
       throw ApiException(
@@ -262,9 +324,10 @@ class ApiService {
     return (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
   }
 
-  static Future<List<Map<String, dynamic>>> fetchUserWatchlists(String auth0Sub) async {
+  static Future<List<Map<String, dynamic>>> fetchUserWatchlists(String userId) async {
     final res = await http.get(
-      Uri.parse('$_base/users/$auth0Sub/watchlists'),
+      Uri.parse('$_base/users/$userId/watchlists'),
+      headers: _auth(),
     ).timeout(_timeout);
     if (res.statusCode >= 400) {
       throw ApiException(
@@ -275,28 +338,35 @@ class ApiService {
     return (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
   }
 
-  //Friend request methods
+  static Future<Map<String, dynamic>> fetchUser(String userId, {String? requesterId}) async {
+    var url = '$_base/users/$userId';
+    if (requesterId != null) url += '?requesterId=${Uri.encodeQueryComponent(requesterId)}';
+    final res = await http.get(Uri.parse(url), headers: _auth()).timeout(_timeout);
+    return _decode(res);
+  }
+
+
   static Future<Map<String, dynamic>> sendFriendRequest({
     required String fromId,
     required String toId,
   }) async {
     final res = await http.post(
       Uri.parse('$_base/friend-requests'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _json(),
       body: jsonEncode({'fromId': fromId, 'toId': toId}),
-      ).timeout(_timeout);
-      return _decode(res);
+    ).timeout(_timeout);
+    return _decode(res);
   }
 
-  static Future<List<Map<String, dynamic>>> fetchFriendRequests(String auth0Sub) async{
+  static Future<List<Map<String, dynamic>>> fetchFriendRequests(String userId) async {
     final res = await http.get(
-      Uri.parse('$_base/users/$auth0Sub/friend-requests'),
+      Uri.parse('$_base/users/$userId/friend-requests'),
+      headers: _auth(),
     ).timeout(_timeout);
-
     if (res.statusCode >= 400) {
       throw ApiException(
         res.statusCode,
-        (jsonDecode(res.body) as Map<String, dynamic>)['error'] ?? 'Unkown error',
+        (jsonDecode(res.body) as Map<String, dynamic>)['error'] ?? 'Unknown error',
       );
     }
     return (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
@@ -305,44 +375,38 @@ class ApiService {
   static Future<void> acceptFriendRequest(String requestId) async {
     final res = await http.patch(
       Uri.parse('$_base/friend-requests/$requestId/accept'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _json(),
+      body: jsonEncode({}),
     ).timeout(_timeout);
     _decode(res);
   }
 
-  static Future<void> declineFriendRequest(String requestId) async{
+  static Future<void> declineFriendRequest(String requestId) async {
     final res = await http.delete(
       Uri.parse('$_base/friend-requests/$requestId'),
+      headers: _auth(),
     ).timeout(_timeout);
     _decode(res);
   }
 
-  static Future<List<Map<String, dynamic>>> fetchFriends(String auth0Sub) async {
+  static Future<List<Map<String, dynamic>>> fetchFriends(String userId) async {
     final res = await http.get(
-      Uri.parse('$_base/users/$auth0Sub/friends'),
+      Uri.parse('$_base/users/$userId/friends'),
+      headers: _auth(),
     ).timeout(_timeout);
-    if (res.statusCode >= 400){
+    if (res.statusCode >= 400) {
       throw ApiException(
         res.statusCode,
-        (jsonDecode(res.body) as Map<String, dynamic>)['error'] ?? 'Unkown error',
+        (jsonDecode(res.body) as Map<String, dynamic>)['error'] ?? 'Unknown error',
       );
     }
-
     return (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
   }
 
-  static Future<Map<String, dynamic>> fetchUser(String auth0Sub, {String? requesterId}) async {
-    var url = '$_base/users/$auth0Sub';
-    if (requesterId != null) url += '?requesterId=${Uri.encodeQueryComponent(requesterId)}';
-    final res = await http.get(Uri.parse(url)).timeout(_timeout);
-    return _decode(res);
-  }
 
-  // ─── Reviews ───────────────────────────────────────────────────────────────
-
-  static Future<List<Map<String, dynamic>>> fetchPublicReviews({int page = 1}) async {
+  static Future<List<Map<String, dynamic>>> fetchPublicReviews({int limit = 500}) async {
     final res = await http.get(
-      Uri.parse('$_base/reviews?page=$page'),
+      Uri.parse('$_base/reviews?limit=$limit'),
     ).timeout(_timeout);
     if (res.statusCode >= 400) return [];
     final body = jsonDecode(res.body);
@@ -370,6 +434,26 @@ class ApiService {
     return (body['reviews'] as List? ?? []).cast<Map<String, dynamic>>();
   }
 
+  static Future<List<Map<String, dynamic>>> fetchMovieWatchers(String movieId) async {
+    final res = await http.get(
+      Uri.parse('$_base/movies/${Uri.encodeComponent(movieId)}/watchers'),
+      headers: _auth(),
+    ).timeout(_timeout);
+    if (res.statusCode >= 400) return [];
+    return (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
+  }
+
+
+  static Future<Map<String, dynamic>> importLetterboxd(String filePath) async {
+    final uri     = Uri.parse('$_base/import/letterboxd');
+    final request = http.MultipartRequest('POST', uri);
+    if (_token != null) request.headers['Authorization'] = 'Bearer $_token';
+    request.files.add(await http.MultipartFile.fromPath('file', filePath));
+    final streamed  = await request.send().timeout(const Duration(seconds: 180));
+    final response  = await http.Response.fromStream(streamed);
+    return _decode(response);
+  }
+
   static Future<Map<String, dynamic>> submitReview({
     required String byId,
     required String movieId,
@@ -383,7 +467,7 @@ class ApiService {
   }) async {
     final res = await http.post(
       Uri.parse('$_base/reviews'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _json(),
       body: jsonEncode({
         'byId': byId,
         'movieId': movieId,
@@ -399,13 +483,63 @@ class ApiService {
     return _decode(res);
   }
 
-  static Future<Map<String, dynamic>> likeReview(String reviewId) async {
+  static Future<void> deleteReview(String reviewId) async {
+    final res = await http.delete(
+      Uri.parse('$_base/reviews/$reviewId'),
+      headers: _auth(),
+    ).timeout(_timeout);
+    _decode(res);
+  }
+
+  static Future<Map<String, dynamic>> likeReview(String reviewId, String userId) async {
     final res = await http.patch(
       Uri.parse('$_base/reviews/$reviewId/like'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _json(),
+      body: jsonEncode({'userId': userId}),
     ).timeout(_timeout);
     return _decode(res);
   }
+
+
+  static Future<List<Map<String, dynamic>>> fetchReviewComments(String reviewId) async {
+    final res = await http.get(
+      Uri.parse('$_base/reviews/$reviewId/comments'),
+    ).timeout(_timeout);
+    if (res.statusCode >= 400) return [];
+    return (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
+  }
+
+  static Future<Map<String, dynamic>> postReviewComment({
+    required String reviewId,
+    required String byId,
+    required String text,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$_base/reviews/$reviewId/comments'),
+      headers: _json(),
+      body: jsonEncode({'byId': byId, 'text': text}),
+    ).timeout(_timeout);
+    return _decode(res);
+  }
+
+  static Future<void> deleteReviewComment(String reviewId, String commentId) async {
+    final res = await http.delete(
+      Uri.parse('$_base/reviews/$reviewId/comments/$commentId'),
+      headers: _auth(),
+    ).timeout(_timeout);
+    _decode(res);
+  }
+
+  static Future<Map<String, dynamic>> likeReviewComment(
+      String reviewId, String commentId, String userId) async {
+    final res = await http.patch(
+      Uri.parse('$_base/reviews/$reviewId/comments/$commentId/like'),
+      headers: _json(),
+      body: jsonEncode({'userId': userId}),
+    ).timeout(_timeout);
+    return _decode(res);
+  }
+
 
   static Future<Map<String, dynamic>?> fetchVetoSession(String watchlistId) async {
     try {
@@ -420,10 +554,12 @@ class ApiService {
     return null;
   }
 
+
   static Future<void> followUser(String targetId, String myId) async {
     try {
-      await http.post(Uri.parse('$_base/users/$targetId/follow'),
-        headers: {'Content-Type': 'application/json'},
+      await http.post(
+        Uri.parse('$_base/users/$targetId/follow'),
+        headers: _json(),
         body: jsonEncode({'followerId': myId}),
       ).timeout(_timeout);
     } catch (_) {}
@@ -433,13 +569,17 @@ class ApiService {
     try {
       await http.delete(
         Uri.parse('$_base/users/$targetId/follow?followerId=${Uri.encodeQueryComponent(myId)}'),
+        headers: _auth(),
       ).timeout(_timeout);
     } catch (_) {}
   }
 
   static Future<Map<String, dynamic>> fetchUserSocialStats(String userId) async {
     try {
-      final res = await http.get(Uri.parse('$_base/users/$userId/social')).timeout(_timeout);
+      final res = await http.get(
+        Uri.parse('$_base/users/$userId/social'),
+        headers: _auth(),
+      ).timeout(_timeout);
       if (res.statusCode == 200) return jsonDecode(res.body) as Map<String, dynamic>;
     } catch (_) {}
     return {'followerCount': 0, 'followingCount': 0};
@@ -447,7 +587,10 @@ class ApiService {
 
   static Future<List<String>> fetchFollowingIds(String myId) async {
     try {
-      final res = await http.get(Uri.parse('$_base/users/$myId/following')).timeout(_timeout);
+      final res = await http.get(
+        Uri.parse('$_base/users/$myId/following'),
+        headers: _auth(),
+      ).timeout(_timeout);
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body);
         if (body is List) return body.cast<String>();
@@ -459,8 +602,9 @@ class ApiService {
 
   static Future<void> likeWatchlist(String watchlistId, String userId) async {
     try {
-      await http.post(Uri.parse('$_base/watchlists/$watchlistId/like'),
-        headers: {'Content-Type': 'application/json'},
+      await http.post(
+        Uri.parse('$_base/watchlists/$watchlistId/like'),
+        headers: _json(),
         body: jsonEncode({'userId': userId}),
       ).timeout(_timeout);
     } catch (_) {}
@@ -470,12 +614,129 @@ class ApiService {
     try {
       await http.delete(
         Uri.parse('$_base/watchlists/$watchlistId/like?userId=${Uri.encodeQueryComponent(userId)}'),
+        headers: _auth(),
       ).timeout(_timeout);
     } catch (_) {}
   }
+
+
+  static Future<List<Map<String, dynamic>>> fetchTopWatchlists({int limit = 20}) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$_base/watchlists/top?limit=$limit'),
+      ).timeout(_timeout);
+      if (res.statusCode >= 400) return [];
+      return (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchWatchedMovies(String userId) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$_base/users/$userId/watched'),
+        headers: _auth(),
+      ).timeout(_timeout);
+      if (res.statusCode >= 400) return [];
+      return (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static Future<void> markMovieWatched(
+    String userId, {
+    required String movieId,
+    String? posterUrl,
+    String title = '',
+    int year = 0,
+  }) async {
+    try {
+      await http.post(
+        Uri.parse('$_base/users/$userId/watched'),
+        headers: _json(),
+        body: jsonEncode({
+          'movieId': movieId,
+          if (posterUrl != null) 'posterUrl': posterUrl,
+          'title': title,
+          'year': year,
+        }),
+      ).timeout(_timeout);
+    } catch (_) {}
+  }
+
+  static Future<void> unmarkMovieWatched(String userId, String movieId) async {
+    try {
+      await http.delete(
+        Uri.parse('$_base/users/$userId/watched/${Uri.encodeComponent(movieId)}'),
+        headers: _auth(),
+      ).timeout(_timeout);
+    } catch (_) {}
+  }
+
+
+  static Future<List<Map<String, dynamic>>> fetchWatchlistActivity(
+      String watchlistId, {int limit = 50}) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$_base/watchlists/$watchlistId/activity?limit=$limit'),
+        headers: _auth(),
+      ).timeout(_timeout);
+      if (res.statusCode >= 400) return [];
+      return (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
+    } catch (_) {
+      return [];
+    }
+  }
+
+
+  static Future<Map<String, dynamic>> fetchCatalogStats() async {
+    final res = await http.get(
+      Uri.parse('$_base/movies/catalog/stats'),
+      headers: _auth(),
+    ).timeout(_timeout);
+    return _decode(res);
+  }
+
+  static Future<Map<String, dynamic>> bulkPullMovies() async {
+    final res = await http.post(
+      Uri.parse('$_base/movies/bulk-pull'),
+      headers: _json(),
+      body: jsonEncode({}),
+    ).timeout(const Duration(seconds: 120));
+    return _decode(res);
+  }
+
+  static Future<Map<String, dynamic>> fetchCatalog({
+    int limit = 20,
+    int offset = 0,
+    String? q,
+  }) async {
+    var url = '$_base/movies/catalog?limit=$limit&offset=$offset';
+    if (q != null && q.isNotEmpty) url += '&q=${Uri.encodeQueryComponent(q)}';
+    final res = await http.get(Uri.parse(url), headers: _auth()).timeout(_timeout);
+    return _decode(res);
+  }
+
+  static Future<void> deleteCatalogEntry(String id) async {
+    final res = await http.delete(
+      Uri.parse('$_base/movies/catalog/${Uri.encodeComponent(id)}'),
+      headers: _auth(),
+    ).timeout(_timeout);
+    _decode(res);
+  }
+
+
+  static Future<void> submitBugReport({required String text, String? userId}) async {
+    final res = await http.post(
+      Uri.parse('$_base/admin/bug-report'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'text': text, 'userId': userId}),
+    ).timeout(_timeout);
+    _decode(res);
+  }
 }
-
-
 
 class ApiException implements Exception {
   final int statusCode;

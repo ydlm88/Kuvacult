@@ -1,4 +1,4 @@
-name: marquee
+name: kuvacult
 description: "A shared collaborative watchlist platform for movies."
 publish_to: 'none'
 
@@ -14,17 +14,16 @@ dependencies:
   google_fonts: ^6.2.1
   provider: ^6.1.2
   http: ^1.6.0
-  # Auth0 Universal Login — handles account creation, login, token storage
-  # Docs: https://auth0.com/docs/libraries/auth0-flutter
-  auth0_flutter: ^1.6.0
+  # Secure local token storage — stores JWT access + refresh tokens
+  flutter_secure_storage: ^9.2.2
   # Image picker — lets users select a profile photo from gallery or camera
   image_picker: ^1.1.2
   # WebSocket client — used for real-time veto game sync
   web_socket_channel: ^3.0.1
-  # Cross-platform OAuth browser flow — used for Windows/Linux where auth0_flutter is unsupported
-  flutter_web_auth_2: ^4.0.0
-  # SHA-256 for PKCE code challenge generation on desktop
-  crypto: ^3.0.3
+  # File picker — lets users select files (ZIP/CSV) for Letterboxd import
+  file_picker: ^8.1.7
+  # Disk-backed image cache — images persist between sessions, eliminates carousel reloads
+  cached_network_image: ^3.4.1
 
 dev_dependencies:
   flutter_test:

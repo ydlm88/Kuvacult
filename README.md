@@ -1,4 +1,4 @@
-# marquee
+# kuvacult
 
 A new Flutter project.
 

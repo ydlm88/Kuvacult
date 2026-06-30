@@ -1,13 +1,12 @@
-import 'dart:io';
+// media_data.dart — HTTP client for the Kuvacult movie API, mapping JSON responses to Movie domain objects.
 import 'package:flutter/material.dart';
 import 'models.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'config.dart';
 
 class MediaData {
-  static final String _base = Platform.isAndroid
-      ? 'http://10.0.2.2:3000'
-      : 'http://localhost:3000';
+  static String get _base => Config.httpBase;
 
   static const _timeout = Duration(seconds: 14);
 

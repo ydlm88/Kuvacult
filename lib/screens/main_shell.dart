@@ -1,3 +1,4 @@
+// main_shell.dart — Root scaffold after login: owns the bottom tab bar and overlays veto invite banners.
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../app_state.dart';
@@ -45,7 +46,7 @@ class _MainShellState extends State<MainShell> {
             _VetoInviteBanner(
               invite: invite,
               onAccept: () {
-                context.read<AppState>().dismissVetoInvite();
+                context.read<AppState>().acceptVetoInvite();
                 setState(() => _currentIndex = 3);
               },
               onDismiss: () => context.read<AppState>().dismissVetoInvite(),

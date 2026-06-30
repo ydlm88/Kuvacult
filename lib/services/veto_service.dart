@@ -1,6 +1,7 @@
+// veto_service.dart — Manages the WebSocket connection and outbound message protocol for the Veto game session.
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import '../config.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 class VetoEvent {
@@ -11,7 +12,7 @@ class VetoEvent {
 
 class VetoService {
   static String get _wsBase =>
-      Platform.isAndroid ? 'ws://10.0.2.2:3000' : 'ws://localhost:3000';
+      Config.wsBase;
 
   WebSocketChannel? _channel;
   final _controller = StreamController<VetoEvent>.broadcast();
@@ -36,52 +37,39 @@ class VetoService {
     );
   }
 
-  // Picker has chosen films — pickCount determines veto budget (1→0 vetos, 2→1, 3→2)
-  void startGame({
-    required List<String> pickedIds,
+  void createLobby({
     required String pickerId,
     required String pickerName,
     required int pickCount,
-    bool sendInvite = true,
+    required bool notifyAll,
   }) {
     _send({
-      'type': 'veto_start',
-      'pickedIds': pickedIds,
+      'type': 'veto_create',
       'pickerId': pickerId,
       'pickerName': pickerName,
       'pickCount': pickCount,
-      'sendInvite': sendInvite,
+      'notifyAll': notifyAll,
     });
   }
 
-  // A user adds their picks to an existing pool
-  void addPicks({
-    required List<String> additionalPickIds,
-    required String pickerId,
-    required String pickerName,
-    required int pickCount,
-  }) {
-    _send({
-      'type': 'veto_add_picks',
-      'additionalPickIds': additionalPickIds,
-      'pickerId': pickerId,
-      'pickerName': pickerName,
-      'pickCount': pickCount,
-    });
+  void joinLobby({required String playerId, required String playerName}) {
+    _send({'type': 'veto_join', 'playerId': playerId, 'playerName': playerName});
   }
 
-  // Vetoer has eliminated a film — sends to server, server broadcasts to all members
+  void hostStartGame({required String hostId}) {
+    _send({'type': 'veto_start_game', 'hostId': hostId});
+  }
+
+  void submitPicks({required String playerId, required List<String> pickedIds}) {
+    _send({'type': 'veto_add_picks', 'playerId': playerId, 'pickedIds': pickedIds});
+  }
+
   void vetoMovie({
     required String vetoedId,
     required String vetoerId,
     required String vetoerName,
   }) {
-    _send({
-      'type': 'veto_action',
-      'vetoedId': vetoedId,
-      'vetoerId': vetoerId,
-      'vetoerName': vetoerName,
-    });
+    _send({'type': 'veto_action', 'vetoedId': vetoedId, 'vetoerId': vetoerId, 'vetoerName': vetoerName});
   }
 
   void blackjackBet({required String playerId, required String playerName, required String betMovieId}) {
@@ -100,12 +88,16 @@ class VetoService {
     _send({'type': 'blackjack_deal_again'});
   }
 
-  void _send(Map<String, dynamic> msg) {
-    _channel?.sink.add(jsonEncode(msg));
+  void cancelLobby({required String hostId}) {
+    _send({'type': 'veto_cancel', 'hostId': hostId});
   }
 
   void resetGame() {
     _send({'type': 'veto_reset'});
+  }
+
+  void _send(Map<String, dynamic> msg) {
+    _channel?.sink.add(jsonEncode(msg));
   }
 
   void disconnect() {

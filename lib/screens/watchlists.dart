@@ -1,3 +1,6 @@
+// watchlists.dart — Lists all the user's watchlists with grid/list toggle, search, pagination, invite flow, and create/rename/delete/leave actions.
+
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -5,6 +8,7 @@ import '../theme.dart';
 import '../models.dart';
 import '../app_state.dart';
 import '../widgets/avatar.dart';
+import '../widgets/copy_button.dart';
 import '../widgets/sign_in_sheet.dart';
 import 'watchlist.dart';
 
@@ -16,8 +20,13 @@ class WatchlistsScreen extends StatefulWidget {
 }
 
 class _WatchlistsScreenState extends State<WatchlistsScreen> {
+  static const _kPageSize = 20;
+
   final _searchCtrl = TextEditingController();
-  String _query = '';
+  String _query    = '';
+  bool _refreshing = false;
+  bool _gridView   = false;
+  int _page        = 0;
 
   @override
   void dispose() {
@@ -25,21 +34,37 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
     super.dispose();
   }
 
+  Future<void> _refresh(AppState state) async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    await state.refreshProfile();
+    if (mounted) setState(() => _refreshing = false);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final allLists = context.watch<AppState>().watchlists;
+    final state = context.watch<AppState>();
+    final allLists = state.watchlists;
+    final currentUserId = state.currentUser?.id;
     final lists = _query.isEmpty
         ? allLists
         : allLists
             .where((wl) =>
                 wl.name.toLowerCase().contains(_query.toLowerCase()))
             .toList();
+    final pageCount = lists.isEmpty ? 0 : (lists.length / _kPageSize).ceil();
+    final page      = pageCount == 0 ? 0 : _page.clamp(0, pageCount - 1);
+    final pageItems = lists.skip(page * _kPageSize).take(_kPageSize).toList();
 
     return Scaffold(
       backgroundColor: MC.bg0,
-      body: CustomScrollView(
+      body: RefreshIndicator(
+        color: MC.accent1,
+        backgroundColor: MC.bg1,
+        onRefresh: () => _refresh(state),
+        child: CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
-          // ── Header ──────────────────────────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 62, 20, 12),
@@ -57,6 +82,39 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
                       ],
                     ),
                   ),
+                  GestureDetector(
+                    onTap: () => _refresh(state),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: MC.line, width: 0.5),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: _refreshing
+                          ? const SizedBox(
+                              width: 15, height: 15,
+                              child: CircularProgressIndicator(
+                                  color: MC.mute, strokeWidth: 1.5))
+                          : const Icon(Icons.refresh_rounded,
+                              color: MC.mute, size: 15),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: () => setState(() { _gridView = !_gridView; _page = 0; }),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: MC.line, width: 0.5),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        _gridView ? Icons.view_list_rounded : Icons.grid_view_rounded,
+                        color: MC.mute, size: 15,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
                   _NewListButton(
                       onTap: () => _showCreateSheet(context)),
                 ],
@@ -64,7 +122,15 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
             ),
           ),
 
-          // ── Search bar ───────────────────────────────────────────────────────
+          if (state.pendingInvites.isNotEmpty)
+            SliverToBoxAdapter(
+              child: _PendingInvitesSection(
+                invites: state.pendingInvites,
+                onAccept: (inv) => state.acceptWatchlistInvite(inv.watchlistId, inv.id),
+                onDecline: (inv) => state.declineWatchlistInvite(inv.watchlistId, inv.id),
+              ),
+            ),
+
           if (allLists.isNotEmpty)
             SliverToBoxAdapter(
               child: Padding(
@@ -83,7 +149,7 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
                       Expanded(
                         child: TextField(
                           controller: _searchCtrl,
-                          onChanged: (q) => setState(() => _query = q),
+                          onChanged: (q) => setState(() { _query = q; _page = 0; }),
                           style: const TextStyle(
                               color: MC.ink, fontSize: 14, letterSpacing: -0.2),
                           decoration: const InputDecoration(
@@ -100,7 +166,7 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
                         GestureDetector(
                           onTap: () {
                             _searchCtrl.clear();
-                            setState(() => _query = '');
+                            setState(() { _query = ''; _page = 0; });
                           },
                           child: const Icon(Icons.close_rounded,
                               color: MC.dim, size: 16),
@@ -111,10 +177,9 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
               ),
             ),
 
-          // ── List or empty states ─────────────────────────────────────────────
-          if (allLists.isEmpty)
+          if (allLists.isEmpty && state.pendingInvites.isEmpty)
             SliverToBoxAdapter(child: _buildEmptyState(context))
-          else if (lists.isEmpty)
+          else if (lists.isEmpty && _query.isNotEmpty)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
@@ -122,19 +187,111 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
                     style: const TextStyle(color: MC.dim, fontSize: 13)),
               ),
             )
+          else if (_gridView)
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 260,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
+                  childAspectRatio: 0.68,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (ctx, i) {
+                    final wl = pageItems[i];
+                    final isOwner = currentUserId != null &&
+                        wl.memberIds.isNotEmpty &&
+                        wl.memberIds[0] == currentUserId;
+                    return _WatchlistGridCard(
+                      watchlist: wl,
+                      isOwner: isOwner,
+                      onTap: () => _open(context, wl),
+                      onInvite: () => _showInviteSheet(context, wl),
+                      onRename: () => _showRenameSheet(context, wl),
+                      onDelete: () => _confirmDelete(context, wl),
+                      onLeave: () => _confirmLeave(context, wl),
+                    );
+                  },
+                  childCount: pageItems.length,
+                ),
+              ),
+            )
           else
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
-                  (ctx, i) => _WatchlistCard(
-                    watchlist: lists[i],
-                    onTap: () => _open(context, lists[i]),
-                    onInvite: () => _showInviteSheet(context, lists[i]),
-                    onRename: () => _showRenameSheet(context, lists[i]),
-                    onDelete: () => _confirmDelete(context, lists[i]),
-                  ),
-                  childCount: lists.length,
+                  (ctx, i) {
+                    final wl = pageItems[i];
+                    final isOwner = currentUserId != null &&
+                        wl.memberIds.isNotEmpty &&
+                        wl.memberIds[0] == currentUserId;
+                    return _WatchlistCard(
+                      watchlist: wl,
+                      isOwner: isOwner,
+                      onTap: () => _open(context, wl),
+                      onInvite: () => _showInviteSheet(context, wl),
+                      onRename: () => _showRenameSheet(context, wl),
+                      onDelete: () => _confirmDelete(context, wl),
+                      onLeave: () => _confirmLeave(context, wl),
+                    );
+                  },
+                  childCount: pageItems.length,
+                ),
+              ),
+            ),
+
+          if (pageCount > 1)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    GestureDetector(
+                      onTap: page > 0
+                          ? () => setState(() => _page = page - 1)
+                          : null,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: page > 0 ? MC.bg1 : MC.bg0,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: MC.line, width: 0.5),
+                        ),
+                        child: Text('← Prev',
+                            style: TextStyle(
+                                color: page > 0 ? MC.ink : MC.dim,
+                                fontSize: 12)),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      '${page + 1} / $pageCount',
+                      style: MT.mono(size: 11, letterSpacing: 0.5, color: MC.mute),
+                    ),
+                    const SizedBox(width: 12),
+                    GestureDetector(
+                      onTap: page < pageCount - 1
+                          ? () => setState(() => _page = page + 1)
+                          : null,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: page < pageCount - 1 ? MC.bg1 : MC.bg0,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: MC.line, width: 0.5),
+                        ),
+                        child: Text('Next →',
+                            style: TextStyle(
+                                color: page < pageCount - 1 ? MC.ink : MC.dim,
+                                fontSize: 12)),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -142,10 +299,10 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
           const SliverToBoxAdapter(child: SizedBox(height: 120)),
         ],
       ),
+      ),
     );
   }
 
-  // ── Empty state ──────────────────────────────────────────────────────────────
   Widget _buildEmptyState(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 60, 20, 0),
@@ -186,14 +343,12 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
     );
   }
 
-  // ── Navigation ────────────────────────────────────────────────────────────────
   void _open(BuildContext context, Watchlist wl) {
     context.read<AppState>().setActiveWatchlist(wl.id);
     Navigator.push(
         context, MaterialPageRoute(builder: (_) => const WatchlistScreen()));
   }
 
-  // ── Create sheet ─────────────────────────────────────────────────────────────
   void _showCreateSheet(BuildContext context) {
     if (context.read<AppState>().isGuest) {
       showSignInSheet(context);
@@ -277,7 +432,6 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
     );
   }
 
-  // ── Invite sheet ─────────────────────────────────────────────────────────────
   void _showInviteSheet(BuildContext context, Watchlist wl) {
     showModalBottomSheet(
       context: context,
@@ -290,7 +444,6 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
     );
   }
 
-  // ── Rename sheet ─────────────────────────────────────────────────────────────
   void _showRenameSheet(BuildContext context, Watchlist wl) {
     if (context.read<AppState>().isGuest) {
       showSignInSheet(context);
@@ -374,7 +527,6 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
     );
   }
 
-  // ── Delete confirmation ───────────────────────────────────────────────────────
   void _confirmDelete(BuildContext context, Watchlist wl) {
     if (context.read<AppState>().isGuest) {
       showSignInSheet(context);
@@ -412,9 +564,203 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
       ),
     );
   }
+
+  void _confirmLeave(BuildContext context, Watchlist wl) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: MC.bg1,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Leave "${wl.name}"?',
+            style: const TextStyle(color: MC.ink)),
+        content: const Text(
+          'You will be removed from this list. The list stays for other members.',
+          style: TextStyle(color: MC.mute, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: MC.mute)),
+          ),
+          TextButton(
+            onPressed: () {
+              context.read<AppState>().leaveWatchlist(wl.id);
+              Navigator.pop(ctx);
+            },
+            child: const Text('Leave', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-// ── New list button ───────────────────────────────────────────────────────────
+class _WatchlistGridCard extends StatelessWidget {
+  final Watchlist watchlist;
+  final bool isOwner;
+  final VoidCallback onTap;
+  final VoidCallback onInvite;
+  final VoidCallback onRename;
+  final VoidCallback onDelete;
+  final VoidCallback onLeave;
+
+  const _WatchlistGridCard({
+    required this.watchlist,
+    required this.isOwner,
+    required this.onTap,
+    required this.onInvite,
+    required this.onRename,
+    required this.onDelete,
+    required this.onLeave,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final count = watchlist.movies.length;
+    final withPosters = watchlist.movies
+        .where((m) => (m.poster.imageUrl ?? '').isNotEmpty)
+        .take(4)
+        .toList();
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          color: MC.bg1,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: MC.line, width: 0.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              flex: 3,
+              child: ClipRRect(
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(13)),
+                child: _buildMosaic(withPosters),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(watchlist.name,
+                            style: MT.display(size: 13, letterSpacing: -0.3),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                        const SizedBox(height: 2),
+                        Text('$count ${count == 1 ? 'film' : 'films'}',
+                            style: MT.mono(size: 9, letterSpacing: 1, color: MC.mute)),
+                      ],
+                    ),
+                  ),
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert, color: MC.dim, size: 16),
+                    color: MC.bg2,
+                    padding: EdgeInsets.zero,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    onSelected: (val) {
+                      switch (val) {
+                        case 'invite': onInvite();
+                        case 'rename': onRename();
+                        case 'delete': onDelete();
+                        case 'leave':  onLeave();
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      PopupMenuItem(
+                        value: 'invite',
+                        child: Row(children: const [
+                          Icon(Icons.person_add_outlined, color: MC.mute, size: 16),
+                          SizedBox(width: 10),
+                          Text('Invite', style: TextStyle(color: MC.ink, fontSize: 14)),
+                        ]),
+                      ),
+                      if (isOwner)
+                        PopupMenuItem(
+                          value: 'rename',
+                          child: Row(children: const [
+                            Icon(Icons.edit_outlined, color: MC.mute, size: 16),
+                            SizedBox(width: 10),
+                            Text('Rename', style: TextStyle(color: MC.ink, fontSize: 14)),
+                          ]),
+                        ),
+                      if (isOwner)
+                        PopupMenuItem(
+                          value: 'delete',
+                          child: Row(children: const [
+                            Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 16),
+                            SizedBox(width: 10),
+                            Text('Delete', style: TextStyle(color: Colors.redAccent, fontSize: 14)),
+                          ]),
+                        )
+                      else
+                        PopupMenuItem(
+                          value: 'leave',
+                          child: Row(children: const [
+                            Icon(Icons.exit_to_app_rounded, color: Colors.redAccent, size: 16),
+                            SizedBox(width: 10),
+                            Text('Leave list', style: TextStyle(color: Colors.redAccent, fontSize: 14)),
+                          ]),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMosaic(List<Movie> posters) {
+    Widget img(Movie m) => SizedBox.expand(
+      child: CachedNetworkImage(
+        imageUrl: m.poster.imageUrl!,
+        fit: BoxFit.cover,
+        errorWidget: (_, __, ___) => Container(color: MC.bg2),
+      ),
+    );
+
+    if (posters.isEmpty) {
+      return Container(
+        color: MC.bg2,
+        child: const Center(
+          child: Icon(Icons.movie_outlined, color: MC.dim, size: 32),
+        ),
+      );
+    }
+    if (posters.length == 1) return img(posters[0]);
+    if (posters.length < 4) {
+      return Row(children: [
+        Expanded(child: img(posters[0])),
+        const SizedBox(width: 1),
+        Expanded(child: img(posters[1])),
+      ]);
+    }
+    return Column(children: [
+      Expanded(child: Row(children: [
+        Expanded(child: img(posters[0])),
+        const SizedBox(width: 1),
+        Expanded(child: img(posters[1])),
+      ])),
+      const SizedBox(height: 1),
+      Expanded(child: Row(children: [
+        Expanded(child: img(posters[2])),
+        const SizedBox(width: 1),
+        Expanded(child: img(posters[3])),
+      ])),
+    ]);
+  }
+}
+
 class _NewListButton extends StatelessWidget {
   final VoidCallback onTap;
   const _NewListButton({required this.onTap});
@@ -448,20 +794,23 @@ class _NewListButton extends StatelessWidget {
   }
 }
 
-// ── Watchlist card ────────────────────────────────────────────────────────────
 class _WatchlistCard extends StatelessWidget {
   final Watchlist watchlist;
+  final bool isOwner;
   final VoidCallback onTap;
   final VoidCallback onInvite;
   final VoidCallback onRename;
   final VoidCallback onDelete;
+  final VoidCallback onLeave;
 
   const _WatchlistCard({
     required this.watchlist,
+    required this.isOwner,
     required this.onTap,
     required this.onInvite,
     required this.onRename,
     required this.onDelete,
+    required this.onLeave,
   });
 
   @override
@@ -479,7 +828,6 @@ class _WatchlistCard extends StatelessWidget {
         ),
         child: Row(
           children: [
-            // Amber accent bar
             Container(
               width: 3,
               height: 52,
@@ -489,7 +837,6 @@ class _WatchlistCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
-            // Content
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -539,7 +886,6 @@ class _WatchlistCard extends StatelessWidget {
                 ],
               ),
             ),
-            // Overflow menu
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_horiz,
                   color: MC.mute, size: 20),
@@ -548,48 +894,48 @@ class _WatchlistCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12)),
               onSelected: (val) {
                 switch (val) {
-                  case 'invite':
-                    onInvite();
-                  case 'rename':
-                    onRename();
-                  case 'delete':
-                    onDelete();
+                  case 'invite': onInvite();
+                  case 'rename': onRename();
+                  case 'delete': onDelete();
+                  case 'leave':  onLeave();
                 }
               },
               itemBuilder: (_) => [
                 PopupMenuItem(
                   value: 'invite',
                   child: Row(children: const [
-                    Icon(Icons.person_add_outlined,
-                        color: MC.mute, size: 16),
+                    Icon(Icons.person_add_outlined, color: MC.mute, size: 16),
                     SizedBox(width: 10),
-                    Text('Invite',
-                        style:
-                            TextStyle(color: MC.ink, fontSize: 14)),
+                    Text('Invite', style: TextStyle(color: MC.ink, fontSize: 14)),
                   ]),
                 ),
-                PopupMenuItem(
-                  value: 'rename',
-                  child: Row(children: const [
-                    Icon(Icons.edit_outlined,
-                        color: MC.mute, size: 16),
-                    SizedBox(width: 10),
-                    Text('Rename',
-                        style:
-                            TextStyle(color: MC.ink, fontSize: 14)),
-                  ]),
-                ),
-                PopupMenuItem(
-                  value: 'delete',
-                  child: Row(children: const [
-                    Icon(Icons.delete_outline_rounded,
-                        color: Colors.redAccent, size: 16),
-                    SizedBox(width: 10),
-                    Text('Delete',
-                        style: TextStyle(
-                            color: Colors.redAccent, fontSize: 14)),
-                  ]),
-                ),
+                if (isOwner)
+                  PopupMenuItem(
+                    value: 'rename',
+                    child: Row(children: const [
+                      Icon(Icons.edit_outlined, color: MC.mute, size: 16),
+                      SizedBox(width: 10),
+                      Text('Rename', style: TextStyle(color: MC.ink, fontSize: 14)),
+                    ]),
+                  ),
+                if (isOwner)
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: Row(children: const [
+                      Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 16),
+                      SizedBox(width: 10),
+                      Text('Delete', style: TextStyle(color: Colors.redAccent, fontSize: 14)),
+                    ]),
+                  )
+                else
+                  PopupMenuItem(
+                    value: 'leave',
+                    child: Row(children: const [
+                      Icon(Icons.exit_to_app_rounded, color: Colors.redAccent, size: 16),
+                      SizedBox(width: 10),
+                      Text('Leave list', style: TextStyle(color: Colors.redAccent, fontSize: 14)),
+                    ]),
+                  ),
               ],
             ),
           ],
@@ -599,7 +945,6 @@ class _WatchlistCard extends StatelessWidget {
   }
 }
 
-// ── Invite sheet ─────────────────────────────────────────────────────────────
 class _InviteSheet extends StatefulWidget {
   final String watchlistId;
   final BuildContext parentContext;
@@ -655,7 +1000,7 @@ class _InviteSheetState extends State<_InviteSheet> {
     });
     ScaffoldMessenger.of(widget.parentContext).showSnackBar(
       SnackBar(
-        content: Text('${user.displayName} added to list',
+        content: Text('Invite sent to ${user.displayName}',
             style: const TextStyle(color: MC.ink, fontSize: 13)),
         backgroundColor: MC.bg1,
         behavior: SnackBarBehavior.floating,
@@ -691,45 +1036,29 @@ class _InviteSheetState extends State<_InviteSheet> {
           Text('Invite to ${watchlist.name}',
               style: MT.display(size: 22)),
           const SizedBox(height: 4),
-          const Text('Share this code to invite collaborators',
+          const Text('They\'ll receive an invite to accept or decline',
               style: TextStyle(color: MC.mute, fontSize: 13)),
           const SizedBox(height: 20),
-          GestureDetector(
-            onTap: () {
-              Clipboard.setData(ClipboardData(text: watchlist.listKey));
-              ScaffoldMessenger.of(widget.parentContext).showSnackBar(
-                SnackBar(
-                  content: const Text('Code copied',
-                      style: TextStyle(color: MC.ink, fontSize: 13)),
-                  backgroundColor: MC.bg1,
-                  behavior: SnackBarBehavior.floating,
-                  margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-              );
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-              decoration: BoxDecoration(
-                color: MC.bg2,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: MC.accent1.withAlpha(100), width: 0.5),
-              ),
-              child: Row(
-                children: [
-                  Flexible(
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(watchlist.listKey,
-                          style: MT.mono(size: 22, letterSpacing: 6, color: MC.accent1)),
-                    ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            decoration: BoxDecoration(
+              color: MC.bg2,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: MC.accent1.withAlpha(100), width: 0.5),
+            ),
+            child: Row(
+              children: [
+                Flexible(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(watchlist.listKey,
+                        style: MT.mono(size: 22, letterSpacing: 6, color: MC.accent1)),
                   ),
-                  const SizedBox(width: 12),
-                  const Icon(Icons.copy_rounded, color: MC.mute, size: 18),
-                ],
-              ),
+                ),
+                const SizedBox(width: 12),
+                CopyButton(text: watchlist.listKey, iconSize: 18, color: MC.mute),
+              ],
             ),
           ),
           const SizedBox(height: 10),
@@ -818,7 +1147,7 @@ class _InviteSheetState extends State<_InviteSheet> {
                             color: MC.accent1,
                             borderRadius: BorderRadius.circular(10),
                           ),
-                          child: const Text('Add',
+                          child: const Text('Invite',
                               style: TextStyle(color: MC.accentInk, fontSize: 12,
                                   fontWeight: FontWeight.w600)),
                         ),
@@ -828,6 +1157,82 @@ class _InviteSheetState extends State<_InviteSheet> {
               );
             }),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _PendingInvitesSection extends StatelessWidget {
+  final List<WatchlistInvite> invites;
+  final void Function(WatchlistInvite) onAccept;
+  final void Function(WatchlistInvite) onDecline;
+
+  const _PendingInvitesSection({
+    required this.invites,
+    required this.onAccept,
+    required this.onDecline,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('INVITES', style: MT.mono(size: 10, letterSpacing: 2, color: MC.accent1)),
+          const SizedBox(height: 8),
+          ...invites.map((inv) => Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: MC.bg1,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: MC.accent1.withAlpha(60), width: 0.5),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(inv.watchlistName,
+                          style: const TextStyle(color: MC.ink, fontSize: 14,
+                              fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 2),
+                      Text('from ${inv.inviterName}',
+                          style: const TextStyle(color: MC.mute, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () => onDecline(inv),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: MC.bg2,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text('Decline', style: MT.mono(size: 10, color: MC.mute, letterSpacing: 1)),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                GestureDetector(
+                  onTap: () => onAccept(inv),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: MC.accent1,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text('Accept', style: MT.mono(size: 10, color: MC.accentInk, letterSpacing: 1)),
+                  ),
+                ),
+              ],
+            ),
+          )),
         ],
       ),
     );

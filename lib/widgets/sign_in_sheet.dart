@@ -1,9 +1,10 @@
+//Most of these features are removed for now.
+// sign_in_sheet.dart — Modal bottom sheet prompting guest users to sign in or create an account.
 import 'package:flutter/material.dart';
 import '../theme.dart';
 import '../screens/auth.dart';
 
-/// Shows a bottom sheet prompting the user to sign in.
-/// Call this anywhere a guest taps a feature that requires an account.
+/// Call this anywhere a guest taps a feature that requires an account. 
 void showSignInSheet(BuildContext context) {
   showModalBottomSheet(
     context: context,

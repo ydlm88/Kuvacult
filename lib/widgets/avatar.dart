@@ -1,7 +1,9 @@
+// avatar.dart — Circular avatar that resolves a member ID to a network photo or an initialled colour circle.
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../app_state.dart';
-import '../mock_data.dart';
+import '../config.dart';
 import '../models.dart';
 
 class AvatarWidget extends StatelessWidget {
@@ -21,25 +23,9 @@ class AvatarWidget extends StatelessWidget {
     final state = context.read<AppState>();
     final currentUser = state.currentUser;
 
-    if (memberId == 'both') {
-      return SizedBox(
-        width: size * 1.5,
-        height: size,
-        child: Stack(
-          children: [
-            Positioned(left: 0, child: _circle(kMembers['mia']!, size * 0.75)),
-            Positioned(
-              right: 0, bottom: 0,
-              child: _circle(kMembers['leo']!, size * 0.75),
-            ),
-          ],
-        ),
-      );
-    }
+    Member? member;
 
-    Member? member = kMembers[memberId];
-
-    if (member == null && currentUser?.id == memberId) {
+    if (currentUser?.id == memberId) {
       member = Member(
         id: memberId,
         name: currentUser!.displayName,
@@ -51,7 +37,6 @@ class AvatarWidget extends StatelessWidget {
     }
 
     if (member == null) {
-      // Check friends list, then watchlist member profiles
       UserAccount? profile;
       for (final friend in state.friends) {
         if (friend.id == memberId) { profile = friend; break; }
@@ -76,7 +61,6 @@ class AvatarWidget extends StatelessWidget {
       avatarBg: const Color(0xFF555555),
     );
 
-    // Check if this user has a cloud avatar URL
     String? avatarUrl;
     if (currentUser?.id == memberId) {
       avatarUrl = currentUser?.avatarUrl;
@@ -87,8 +71,11 @@ class AvatarWidget extends StatelessWidget {
       avatarUrl ??= state.memberProfiles[memberId]?.avatarUrl;
     }
 
-    if (avatarUrl != null && avatarUrl.startsWith('http')) {
-      return _networkCircle(avatarUrl, size);
+    if (avatarUrl != null && avatarUrl.isNotEmpty) {
+      final resolvedUrl = avatarUrl.startsWith('http')
+          ? avatarUrl
+          : '${Config.httpBase}$avatarUrl';
+      return _networkCircle(resolvedUrl, size);
     }
     return _circle(member, size);
   }
@@ -102,12 +89,14 @@ class AvatarWidget extends StatelessWidget {
         border: ring != null ? Border.all(color: ring!, width: 1.5) : null,
       ),
       child: ClipOval(
-        child: Image.network(
-          url,
+        child: CachedNetworkImage(
+          imageUrl: url,
           width: s,
           height: s,
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+          fadeInDuration: Duration.zero,
+          fadeOutDuration: Duration.zero,
+          errorWidget: (_, __, ___) => const SizedBox.shrink(),
         ),
       ),
     );

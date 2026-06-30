@@ -1,6 +1,6 @@
+// models.dart — Data domain models for the entire app
 import 'package:flutter/material.dart';
 
-// ─── Watch section ────────────────────────────────────────────────────────────
 enum WatchSection { want, watching, watched }
 
 extension WatchSectionExt on WatchSection {
@@ -16,7 +16,7 @@ extension WatchSectionExt on WatchSection {
   }
 }
 
-// ─── Reaction types ───────────────────────────────────────────────────────────
+//Reactions need heavy rework
 enum ReactionType { loved, cried, meh, cozy, want }
 
 extension ReactionTypeExt on ReactionType {
@@ -51,11 +51,10 @@ extension ReactionTypeExt on ReactionType {
   }
 }
 
-// ─── Poster visual data ───────────────────────────────────────────────────────
 class PosterData {
   final Gradient gradient;
   final Color accent;
-  final String style; // editorial | block | blocky | epic | quiet | loud | retro | ominous | surreal | warm
+  final String style; 
   final String? imageUrl;
 
   const PosterData({
@@ -66,7 +65,6 @@ class PosterData {
   });
 }
 
-// ─── Movie note / comment ─────────────────────────────────────────────────────
 class MovieNote {
   final String by;   // member id
   final String text;
@@ -75,7 +73,6 @@ class MovieNote {
   const MovieNote({required this.by, required this.text, required this.at});
 }
 
-// ─── Public review (Letterboxd-style) ────────────────────────────────────────
 class Review {
   final String id;
   final String byId;
@@ -88,11 +85,11 @@ class Review {
   final int movieYear;
   final String? moviePosterUrl;
   final String movieDirector;
-  final double stars; // 0.5–5 in 0.5 steps
+  final double stars; 
   final String text;
   final DateTime at;
   int likes;
-  final int commentCount;
+  int commentCount;
   final bool rewatch;
   bool likedByMe;
 
@@ -118,7 +115,34 @@ class Review {
   });
 }
 
-// ─── Movie ────────────────────────────────────────────────────────────────────
+class ReviewComment {
+  final String id;
+  final String reviewId;
+  final String byId;
+  final String byName;
+  final String byHandle;
+  final Color byAvatarColor;
+  final String? byAvatarUrl;
+  final String text;
+  int likes;
+  bool likedByMe;
+  final DateTime at;
+
+  ReviewComment({
+    required this.id,
+    required this.reviewId,
+    required this.byId,
+    required this.byName,
+    required this.byHandle,
+    required this.byAvatarColor,
+    this.byAvatarUrl,
+    required this.text,
+    this.likes = 0,
+    this.likedByMe = false,
+    required this.at,
+  });
+}
+
 class Movie {
   final String id;
   final String title;
@@ -134,6 +158,7 @@ class Movie {
   Map<String, ReactionType> reactions;
   Map<String, double> stars;
   List<MovieNote> notes;
+  List<String> watchedBy;
   final PosterData poster;
 
   Movie({
@@ -151,13 +176,14 @@ class Movie {
     Map<String, ReactionType>? reactions,
     Map<String, double>? stars,
     List<MovieNote>? notes,
+    List<String>? watchedBy,
     required this.poster,
   })  : reactions = reactions ?? {},
         stars = stars ?? {},
-        notes = notes ?? [];
+        notes = notes ?? [],
+        watchedBy = watchedBy ?? [];
 }
 
-// ─── Streaming service ────────────────────────────────────────────────────────
 class StreamingService {
   final String id;
   final String name;
@@ -174,7 +200,6 @@ class StreamingService {
   });
 }
 
-// ─── Member / room participant ────────────────────────────────────────────────
 class Member {
   final String id;
   final String name;
@@ -189,7 +214,6 @@ class Member {
   });
 }
 
-// ─── Watchlist (shared room) ──────────────────────────────────────────────────
 class Watchlist {
   final String id;
   String name;
@@ -211,15 +235,14 @@ class Watchlist {
         movies = movies ?? [];
 }
 
-// ─── User account ─────────────────────────────────────────────────────────────
 class UserAccount {
   final String id;
   final String username;
   final String email;
-  String displayName;        // editable by user
-  final Color avatarBg;      // auto-assigned colour, used as fallback when no photo
-  String? avatarUrl;         // local file path now; backend CDN URL once uploaded
-  String? roomKey;           // 6-char personal room code (unique, backend-verified)
+  String displayName;        
+  final Color avatarBg;      
+  String? avatarUrl;         
+  String? roomKey;           
   List<String> friendIds;
   List<String> watchlistIds;
 
@@ -237,13 +260,15 @@ class UserAccount {
         watchlistIds = watchlistIds ?? [];
 }
 
-// ─── Friend request ───────────────────────────────────────────────────────────
 class FriendRequest {
   final String id;
   final String fromId;
   final String toId;
   final DateTime sentAt;
   bool accepted;
+  final String? fromUsername;
+  final String? fromDisplayName;
+  final String? fromAvatarUrl;
 
   FriendRequest({
     required this.id,
@@ -251,11 +276,13 @@ class FriendRequest {
     required this.toId,
     required this.sentAt,
     this.accepted = false,
+    this.fromUsername,
+    this.fromDisplayName,
+    this.fromAvatarUrl,
   });
 }
 
-// ─── Activity feed ────────────────────────────────────────────────────────────
-enum ActivityKind { added, reacted, note, rated, moved, vetoPick, vetoed, watched }
+enum ActivityKind { added, reacted, note, rated, moved, vetoPick, vetoed, watched, postedReview }
 
 class ActivityEvent {
   final String? id;
@@ -283,7 +310,24 @@ class ActivityEvent {
   });
 }
 
-// ─── Veto invite ──────────────────────────────────────────────────────────────
+class WatchlistInvite {
+  final String id;
+  final String watchlistId;
+  final String watchlistName;
+  final String inviterId;
+  final String inviterName;
+  final String? inviterAvatarUrl;
+
+  const WatchlistInvite({
+    required this.id,
+    required this.watchlistId,
+    required this.watchlistName,
+    required this.inviterId,
+    required this.inviterName,
+    this.inviterAvatarUrl,
+  });
+}
+
 class VetoInvite {
   final String fromId;
   final String fromName;
@@ -298,7 +342,6 @@ class VetoInvite {
   });
 }
 
-// ─── Blackjack draw-breaker ───────────────────────────────────────────────────
 class BlackjackCard {
   final String suit;  // ♥ ♦ ♣ ♠
   final String rank;  // A 2 3 … 10 J Q K
@@ -345,6 +388,47 @@ class BlackjackPlayer {
         stood: stood ?? this.stood,
         bust: bust ?? this.bust,
       );
+}
+
+enum NotifType {
+  friendRequest,
+  watchlistInvite,
+  vetoInvite,
+  likedReview,
+  likedWatchlist,
+  followed,
+}
+
+class AppNotification {
+  final String id;
+  final NotifType type;
+  final DateTime at;
+  bool read;
+
+  final String? fromId;
+  final String? fromName;
+  final String? fromHandle;
+  final String? fromAvatarUrl;
+
+  final String? watchlistId;
+  final String? watchlistName;
+  final String? reviewId;
+  final String? movieTitle;
+
+  AppNotification({
+    required this.id,
+    required this.type,
+    required this.at,
+    this.read = false,
+    this.fromId,
+    this.fromName,
+    this.fromHandle,
+    this.fromAvatarUrl,
+    this.watchlistId,
+    this.watchlistName,
+    this.reviewId,
+    this.movieTitle,
+  });
 }
 
 class BlackjackState {
@@ -410,7 +494,20 @@ class BlackjackState {
       );
 }
 
-// ─── Sort / filter options ────────────────────────────────────────────────────
+class WatchedMovie {
+  final String id;       // IMDb ID
+  final String? posterUrl;
+  final String title;
+  final int year;
+
+  const WatchedMovie({
+    required this.id,
+    this.posterUrl,
+    this.title = '',
+    this.year = 0,
+  });
+}
+
 enum SortOrder { dateAdded, rating, runtime, title, year }
 
 extension SortOrderExt on SortOrder {

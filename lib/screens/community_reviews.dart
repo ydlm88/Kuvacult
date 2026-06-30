@@ -1,8 +1,14 @@
+// community_reviews.dart — Community hub screen showing trending movies, popular reviews, top watchlists, and top reviewers, with explore drill-downs and an activity/notification drawer.
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme.dart';
 import '../models.dart';
 import '../app_state.dart';
+import '../config.dart';
+import '../widgets/review_text.dart';
+import '../services/api_service.dart';
 import 'detail.dart';
 import 'user_profile.dart';
 import 'activity.dart';
@@ -25,11 +31,32 @@ class CommunityReviewsScreen extends StatefulWidget {
 }
 
 class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
+  static const _kPageSize = 15;
+  String _reviewSearch = '';
+  final _reviewSearchCtrl = TextEditingController();
+  int _reviewPage = 0;
+  final _popularMoviesScroll = ScrollController();
+  final _popularReviewsScroll = ScrollController();
+  final _topWatchlistsScroll = ScrollController();
+  final _topReviewersScroll = ScrollController();
+
+  @override
+  void dispose() {
+    _reviewSearchCtrl.dispose();
+    _popularMoviesScroll.dispose();
+    _popularReviewsScroll.dispose();
+    _topWatchlistsScroll.dispose();
+    _topReviewersScroll.dispose();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<AppState>().loadPublicReviews();
+      final state = context.read<AppState>();
+      state.loadPublicReviews();
+      state.loadCommunityTopWatchlists();
     });
   }
 
@@ -39,27 +66,48 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
     final reviews = state.publicReviews;
     final loading = state.reviewsLoading;
 
-    // Popular reviews this week sorted by likes
-    final popularReviews = List<Review>.from(state.reviewsThisWeek)
+    // Popular reviews this month sorted by likes
+    final popularReviews = List<Review>.from(state.reviewsThisMonth)
       ..sort((a, b) => b.likes.compareTo(a.likes));
-    final topWeekReviews = popularReviews.take(10).toList();
+    final topMonthReviews = popularReviews.take(20).toList();
 
-    // Top watchlists by likes
-    final topWatchlists = List<Watchlist>.from(state.watchlists)
-      ..sort((a, b) => b.likes.compareTo(a.likes));
-    final topTenWatchlists = topWatchlists.take(10).toList();
+    // Top watchlists from community API (all watchlists, sorted by likes)
+    final topTenWatchlists = state.communityTopWatchlists;
 
-    // Top reviewers
     final topReviewers = state.topReviewers();
 
-    // Trending movies
     final trendingMovies = state.trendingMovies;
+
+    final filteredReviews = _reviewSearch.isEmpty
+        ? reviews
+        : reviews
+            .where((r) => r.movieTitle
+                .toLowerCase()
+                .contains(_reviewSearch.toLowerCase()))
+            .toList();
+    final reviewPageCount =
+        filteredReviews.isEmpty ? 0 : (filteredReviews.length / _kPageSize).ceil();
+    final currentReviewPage =
+        reviewPageCount == 0 ? 0 : _reviewPage.clamp(0, reviewPageCount - 1);
+    final reviewPageItems = filteredReviews
+        .skip(currentReviewPage * _kPageSize)
+        .take(_kPageSize)
+        .toList();
 
     return Scaffold(
       backgroundColor: MC.bg0,
-      body: CustomScrollView(
-        slivers: [
-          // ── Header ──────────────────────────────────────────────────────────
+      body: RefreshIndicator(
+        color: MC.kuvacultScore,
+        backgroundColor: MC.bg1,
+        onRefresh: () => Future.wait([
+          state.loadPublicReviews(force: true),
+          state.loadTrending(),
+          state.refreshActivity(),
+          state.loadCommunityTopWatchlists(),
+        ]),
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 62, 20, 12),
@@ -69,41 +117,76 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('MARQUEE COMMUNITY',
+                      Text('KUVACULT COMMUNITY',
                           style: MT.mono(
                               size: 10,
                               letterSpacing: 2,
-                              color: MC.marqueeScore)),
+                              color: MC.kuvacultScore)),
                       const SizedBox(height: 4),
                       Text('Reviews', style: MT.display(size: 34)),
                     ],
                   ),
                   const Spacer(),
-                  GestureDetector(
-                    onTap: () => showModalBottomSheet(
-                      context: context,
-                      isScrollControlled: true,
-                      backgroundColor: Colors.transparent,
-                      builder: (_) => const _ActivityDrawer(),
-                    ),
-                    child: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: MC.bg1,
-                        border: Border.all(color: MC.line, width: 0.5),
+                  Builder(builder: (ctx) {
+                    final unread = state.notifications
+                            .where((n) => !n.read)
+                            .length +
+                        state.pendingInvites.length;
+                    return GestureDetector(
+                      onTap: () {
+                        context.read<AppState>().markAllNotificationsRead();
+                        showModalBottomSheet(
+                          context: context,
+                          isScrollControlled: true,
+                          backgroundColor: Colors.transparent,
+                          builder: (_) => const _ActivityDrawer(),
+                        );
+                      },
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: MC.bg1,
+                          border: Border.all(color: MC.line, width: 0.5),
+                        ),
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          alignment: Alignment.center,
+                          children: [
+                            const Icon(Icons.notifications_outlined,
+                                color: MC.mute, size: 20),
+                            if (unread > 0)
+                              Positioned(
+                                top: -4,
+                                right: -4,
+                                child: Container(
+                                  width: 16,
+                                  height: 16,
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFFE05A7A),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: Text(
+                                    unread > 9 ? '9+' : '$unread',
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w700),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
-                      child: const Icon(Icons.notifications_outlined,
-                          color: MC.mute, size: 20),
-                    ),
-                  ),
+                    );
+                  }),
                 ],
               ),
             ),
           ),
 
-          // ── Popular Movies carousel ─────────────────────────────────────────
           SliverToBoxAdapter(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -140,64 +223,69 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
                                   width: 20,
                                   height: 20,
                                   child: CircularProgressIndicator(
-                                      color: MC.marqueeScore, strokeWidth: 2))
+                                      color: MC.kuvacultScore, strokeWidth: 2))
                               : Text('No movies',
                                   style:
                                       TextStyle(color: MC.dim, fontSize: 12)),
                         )
-                      : ListView.builder(
-                          scrollDirection: Axis.horizontal,
-                          padding: const EdgeInsets.symmetric(horizontal: 20),
-                          itemCount: trendingMovies.length,
-                          itemBuilder: (ctx, i) {
-                            final m = trendingMovies[i];
-                            return GestureDetector(
-                              onTap: () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                    builder: (_) => DetailScreen(movie: m)),
-                              ),
-                              child: Container(
-                                width: 110,
-                                margin: const EdgeInsets.only(right: 12),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    ClipRRect(
-                                      borderRadius: BorderRadius.circular(10),
-                                      child: m.poster.imageUrl != null
-                                          ? Image.network(
-                                              m.poster.imageUrl!,
-                                              width: 110,
-                                              height: 155,
-                                              fit: BoxFit.cover,
-                                              errorBuilder: (_, __, ___) =>
-                                                  _moviePlaceholder(),
-                                            )
-                                          : _moviePlaceholder(),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      m.title,
-                                      style: const TextStyle(
-                                          color: MC.ink,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w500),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ],
+                      : ScrollConfiguration(
+                          behavior: ScrollConfiguration.of(context).copyWith(
+                            dragDevices: {PointerDeviceKind.touch, PointerDeviceKind.mouse},
+                          ),
+                          child: ListView.builder(
+                            controller: _popularMoviesScroll,
+                            scrollDirection: Axis.horizontal,
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            itemCount: trendingMovies.length,
+                            itemBuilder: (ctx, i) {
+                              final m = trendingMovies[i];
+                              return GestureDetector(
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                      builder: (_) => DetailScreen(movie: m)),
                                 ),
-                              ),
-                            );
-                          },
+                                child: Container(
+                                  width: 110,
+                                  margin: const EdgeInsets.only(right: 12),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: m.poster.imageUrl != null
+                                            ? CachedNetworkImage(
+                                                imageUrl: m.poster.imageUrl!,
+                                                width: 110,
+                                                height: 155,
+                                                fit: BoxFit.cover,
+                                                errorWidget: (_, __, ___) =>
+                                                    _moviePlaceholder(),
+                                              )
+                                            : _moviePlaceholder(),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        m.title,
+                                        style: const TextStyle(
+                                            color: MC.ink,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w500),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
                         ),
                 ),
               ],
             ),
           ),
 
-          // ── Popular Reviews carousel ────────────────────────────────────────
           SliverToBoxAdapter(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -206,7 +294,7 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
                   padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
                   child: Row(
                     children: [
-                      Text('POPULAR THIS WEEK',
+                      Text('POPULAR THIS MONTH',
                           style: MT.mono(size: 10, letterSpacing: 2)),
                       const Spacer(),
                       GestureDetector(
@@ -227,94 +315,213 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
                 ),
                 SizedBox(
                   height: 180,
-                  child: topWeekReviews.isEmpty
+                  child: topMonthReviews.isEmpty
                       ? Center(
-                          child: Text('No reviews this week',
+                          child: Text('No reviews this month',
                               style: TextStyle(color: MC.dim, fontSize: 12)),
                         )
-                      : ListView.builder(
-                          scrollDirection: Axis.horizontal,
-                          padding: const EdgeInsets.symmetric(horizontal: 20),
-                          itemCount: topWeekReviews.length,
+                      : ScrollConfiguration(
+                          behavior: ScrollConfiguration.of(context).copyWith(
+                            dragDevices: {PointerDeviceKind.touch, PointerDeviceKind.mouse},
+                          ),
+                          child: ListView.builder(
+                            controller: _popularReviewsScroll,
+                            scrollDirection: Axis.horizontal,
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            itemCount: topMonthReviews.length,
                           itemBuilder: (ctx, i) {
-                            final r = topWeekReviews[i];
+                            final r = topMonthReviews[i];
+                            final posterUrl = r.moviePosterUrl != null && r.moviePosterUrl!.isNotEmpty
+                                ? (r.moviePosterUrl!.startsWith('/')
+                                    ? '${Config.httpBase}${r.moviePosterUrl}'
+                                    : r.moviePosterUrl!)
+                                : null;
                             return GestureDetector(
                               onTap: () => Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                    builder: (_) => UserProfileScreen(
-                                        userId: r.byId,
-                                        initialName: r.byName)),
+                                  builder: (_) => DetailScreen(
+                                    movie: Movie(
+                                      id: r.movieId,
+                                      title: r.movieTitle,
+                                      year: r.movieYear,
+                                      runtime: 0,
+                                      rating: 0,
+                                      genres: [],
+                                      director: r.movieDirector,
+                                      streamId: '',
+                                      addedBy: '',
+                                      section: WatchSection.want,
+                                      synopsis: '',
+                                      poster: PosterData(
+                                        gradient: const LinearGradient(
+                                          colors: [Color(0xFF1C1C2E), Color(0xFF2D2D44)],
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                        ),
+                                        accent: const Color(0xFFF6C453),
+                                        imageUrl: r.moviePosterUrl,
+                                      ),
+                                    ),
+                                    scrollToReviewId: r.id,
+                                  ),
+                                ),
                               ),
                               child: Container(
                                 width: 220,
+                                height: 180,
                                 margin: const EdgeInsets.only(right: 12),
                                 padding: const EdgeInsets.all(12),
                                 decoration: BoxDecoration(
                                   color: MC.bg1,
                                   borderRadius: BorderRadius.circular(14),
-                                  border:
-                                      Border.all(color: MC.line, width: 0.5),
+                                  border: Border.all(color: MC.line, width: 0.5),
                                 ),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        _AvatarWidget(
-                                            avatarUrl: r.byAvatarUrl,
-                                            avatarColor: r.byAvatarColor,
-                                            name: r.byName,
-                                            size: 28),
-                                        const SizedBox(width: 8),
+                                        ClipRRect(
+                                          borderRadius: BorderRadius.circular(5),
+                                          child: posterUrl != null
+                                              ? CachedNetworkImage(
+                                                  imageUrl: posterUrl,
+                                                  width: 40,
+                                                  height: 60,
+                                                  fit: BoxFit.cover,
+                                                  errorWidget: (_, __, ___) => Container(
+                                                    width: 40, height: 60, color: MC.bg2,
+                                                    child: const Icon(Icons.movie_outlined, color: MC.dim, size: 14),
+                                                  ),
+                                                )
+                                              : Container(
+                                                  width: 40, height: 60, color: MC.bg2,
+                                                  child: const Icon(Icons.movie_outlined, color: MC.dim, size: 14),
+                                                ),
+                                        ),
+                                        const SizedBox(width: 10),
                                         Expanded(
-                                          child: Text(
-                                            r.byName,
-                                            style: const TextStyle(
-                                                color: MC.ink,
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w600),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              GestureDetector(
+                                                onTap: () => Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder: (_) => UserProfileScreen(
+                                                      userId: r.byId,
+                                                      initialName: r.byName,
+                                                    ),
+                                                  ),
+                                                ),
+                                                child: Row(
+                                                  children: [
+                                                    _AvatarWidget(
+                                                      avatarUrl: r.byAvatarUrl,
+                                                      avatarColor: r.byAvatarColor,
+                                                      name: r.byName,
+                                                      size: 22,
+                                                      userId: r.byId,
+                                                    ),
+                                                    const SizedBox(width: 6),
+                                                    Expanded(
+                                                      child: Text(
+                                                        r.byName,
+                                                        style: const TextStyle(
+                                                          color: MC.ink,
+                                                          fontSize: 11,
+                                                          fontWeight: FontWeight.w600,
+                                                        ),
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow.ellipsis,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                              const SizedBox(height: 5),
+                                              Text(
+                                                r.movieTitle,
+                                                style: MT.display(size: 12, letterSpacing: -0.2),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              const SizedBox(height: 4),
+                                              _StarRow(stars: r.stars),
+                                            ],
                                           ),
                                         ),
                                       ],
                                     ),
                                     const SizedBox(height: 8),
-                                    Text(
-                                      r.movieTitle,
-                                      style: MT.display(
-                                          size: 13, letterSpacing: -0.2),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    const SizedBox(height: 4),
-                                    _StarRow(stars: r.stars),
-                                    const SizedBox(height: 6),
                                     if (r.text.isNotEmpty)
                                       Expanded(
-                                        child: Text(
-                                          r.text,
+                                        child: ReviewText(
+                                          text: r.text,
                                           style: const TextStyle(
-                                              fontSize: 12,
-                                              color: MC.mute,
-                                              height: 1.4),
+                                            fontSize: 11,
+                                            color: MC.mute,
+                                            height: 1.4,
+                                          ),
                                           maxLines: 3,
                                           overflow: TextOverflow.ellipsis,
                                         ),
+                                      )
+                                    else
+                                      const Spacer(),
+                                    const SizedBox(height: 6),
+                                    GestureDetector(
+                                      onTap: () => state.likeReview(r.id),
+                                      child: Row(
+                                        children: [
+                                          Icon(
+                                            r.likedByMe
+                                                ? Icons.favorite_rounded
+                                                : Icons.favorite_border_rounded,
+                                            size: 11,
+                                            color: r.likedByMe
+                                                ? const Color(0xFFE05A7A)
+                                                : MC.dim,
+                                          ),
+                                          const SizedBox(width: 3),
+                                          Text('${r.likes}',
+                                              style: MT.mono(
+                                                  size: 9,
+                                                  letterSpacing: 0,
+                                                  color: r.likedByMe
+                                                      ? const Color(0xFFE05A7A)
+                                                      : MC.dim)),
+                                          const SizedBox(width: 10),
+                                          const Icon(Icons.mode_comment_outlined,
+                                              size: 11, color: MC.dim),
+                                          const SizedBox(width: 3),
+                                          Text('${r.commentCount}',
+                                              style: MT.mono(
+                                                  size: 9,
+                                                  letterSpacing: 0,
+                                                  color: MC.dim)),
+                                          if (state.isWatched(r.movieId)) ...[
+                                            const SizedBox(width: 8),
+                                            const Icon(Icons.remove_red_eye_rounded,
+                                                size: 11, color: MC.mute),
+                                          ],
+                                        ],
                                       ),
+                                    ),
                                   ],
                                 ),
                               ),
                             );
                           },
                         ),
+                        ),
                 ),
               ],
             ),
           ),
 
-          // ── Top Watchlists carousel ─────────────────────────────────────────
           SliverToBoxAdapter(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -343,92 +550,50 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
                   ),
                 ),
                 SizedBox(
-                  height: 100,
+                  height: 172,
                   child: topTenWatchlists.isEmpty
                       ? Center(
                           child: Text('No watchlists',
                               style: TextStyle(color: MC.dim, fontSize: 12)),
                         )
-                      : ListView.builder(
-                          scrollDirection: Axis.horizontal,
-                          padding: const EdgeInsets.symmetric(horizontal: 20),
-                          itemCount: topTenWatchlists.length,
-                          itemBuilder: (ctx, i) {
-                            final wl = topTenWatchlists[i];
-                            return Container(
-                              width: 160,
-                              margin: const EdgeInsets.only(right: 12),
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: MC.bg1,
-                                borderRadius: BorderRadius.circular(12),
-                                border:
-                                    Border.all(color: MC.line, width: 0.5),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    wl.name,
-                                    style: const TextStyle(
-                                        color: MC.ink,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600),
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  Row(
-                                    children: [
-                                      Text(
-                                        '${wl.movies.length} movies',
-                                        style: MT.mono(
-                                            size: 9,
-                                            letterSpacing: 0,
-                                            color: MC.dim),
-                                      ),
-                                      const Spacer(),
-                                      GestureDetector(
-                                        onTap: () =>
-                                            state.likeWatchlist(wl.id),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Icon(
-                                              wl.likedByMe
-                                                  ? Icons.favorite_rounded
-                                                  : Icons.favorite_border_rounded,
-                                              size: 14,
-                                              color: wl.likedByMe
-                                                  ? const Color(0xFFE05A7A)
-                                                  : MC.dim,
-                                            ),
-                                            const SizedBox(width: 3),
-                                            Text(
-                                              '${wl.likes}',
-                                              style: MT.mono(
-                                                  size: 9,
-                                                  letterSpacing: 0,
-                                                  color: wl.likedByMe
-                                                      ? const Color(0xFFE05A7A)
-                                                      : MC.dim),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
+                      : ScrollConfiguration(
+                          behavior: ScrollConfiguration.of(context).copyWith(
+                            dragDevices: {PointerDeviceKind.touch, PointerDeviceKind.mouse},
+                          ),
+                          child: ListView.builder(
+                            controller: _topWatchlistsScroll,
+                            scrollDirection: Axis.horizontal,
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            itemCount: topTenWatchlists.length,
+                            itemBuilder: (ctx, i) {
+                              final wl = topTenWatchlists[i];
+                              final watchlistId = wl['id'] as String? ?? '';
+                              final name = wl['name'] as String? ?? '';
+                              final movieCount = wl['movieCount'] as int? ?? 0;
+                              final likes = wl['likes'] as int? ?? 0;
+                              final isLiked = watchlistId.isNotEmpty &&
+                                  state.isCommunityWatchlistLiked(watchlistId);
+                              return _WatchlistFanCard(
+                                watchlistId: watchlistId,
+                                name: name,
+                                movieCount: movieCount,
+                                likes: likes,
+                                isLiked: isLiked,
+                                onTap: watchlistId.isNotEmpty
+                                    ? () => _openCommunityWatchlist(context, watchlistId, name, initialLikes: likes)
+                                    : () {},
+                                onLike: watchlistId.isNotEmpty
+                                    ? () => state.likeCommunityWatchlist(watchlistId)
+                                    : () {},
+                              );
+                            },
+                          ),
                         ),
                 ),
               ],
             ),
           ),
 
-          // ── Top Reviewers carousel ──────────────────────────────────────────
           SliverToBoxAdapter(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -463,10 +628,15 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
                           child: Text('No reviewers yet',
                               style: TextStyle(color: MC.dim, fontSize: 12)),
                         )
-                      : ListView.builder(
-                          scrollDirection: Axis.horizontal,
-                          padding: const EdgeInsets.symmetric(horizontal: 20),
-                          itemCount: topReviewers.length,
+                      : ScrollConfiguration(
+                          behavior: ScrollConfiguration.of(context).copyWith(
+                            dragDevices: {PointerDeviceKind.touch, PointerDeviceKind.mouse},
+                          ),
+                          child: ListView.builder(
+                            controller: _topReviewersScroll,
+                            scrollDirection: Axis.horizontal,
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            itemCount: topReviewers.length,
                           itemBuilder: (ctx, i) {
                             final r = topReviewers[i];
                             return GestureDetector(
@@ -489,6 +659,7 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
                                               MC.accent1,
                                       name: r['name'] as String? ?? '',
                                       size: 44,
+                                      userId: r['userId'] as String?,
                                     ),
                                     const SizedBox(height: 6),
                                     Text(
@@ -517,21 +688,84 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
                             );
                           },
                         ),
+                        ),
                 ),
               ],
             ),
           ),
 
-          // ── All Reviews header ──────────────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
-              child: Text('ALL REVIEWS',
-                  style: MT.mono(size: 10, letterSpacing: 2)),
+              child: Row(
+                children: [
+                  Text('ALL REVIEWS', style: MT.mono(size: 10, letterSpacing: 2)),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: loading ? null : () => state.loadPublicReviews(force: true),
+                    child: loading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                color: MC.mute, strokeWidth: 1.5),
+                          )
+                        : const Icon(Icons.refresh_rounded,
+                            color: MC.mute, size: 18),
+                  ),
+                ],
+              ),
             ),
           ),
 
-          // ── Reviews feed ────────────────────────────────────────────────────
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: TextField(
+                controller: _reviewSearchCtrl,
+                style: const TextStyle(color: MC.ink, fontSize: 13),
+                onChanged: (v) =>
+                    setState(() { _reviewSearch = v; _reviewPage = 0; }),
+                decoration: InputDecoration(
+                  hintText: 'Search by movie title…',
+                  hintStyle: const TextStyle(color: MC.dim, fontSize: 13),
+                  prefixIcon:
+                      const Icon(Icons.search_rounded, color: MC.dim, size: 18),
+                  suffixIcon: _reviewSearch.isNotEmpty
+                      ? GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _reviewSearch = '';
+                              _reviewPage = 0;
+                            });
+                            _reviewSearchCtrl.clear();
+                          },
+                          child: const Icon(Icons.close_rounded,
+                              color: MC.dim, size: 16),
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: MC.bg1,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: MC.line, width: 0.5),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: MC.line, width: 0.5),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide:
+                        const BorderSide(color: MC.kuvacultScore, width: 1),
+                  ),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                ),
+              ),
+            ),
+          ),
+
           if (loading && reviews.isEmpty)
             const SliverToBoxAdapter(
               child: Padding(
@@ -541,7 +775,7 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
                     width: 24,
                     height: 24,
                     child: CircularProgressIndicator(
-                        color: MC.marqueeScore, strokeWidth: 2),
+                        color: MC.kuvacultScore, strokeWidth: 2),
                   ),
                 ),
               ),
@@ -557,12 +791,12 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
                       height: 56,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: MC.marqueeScore.withAlpha(20),
+                        color: MC.kuvacultScore.withAlpha(20),
                         border: Border.all(
-                            color: MC.marqueeScore.withAlpha(60), width: 1),
+                            color: MC.kuvacultScore.withAlpha(60), width: 1),
                       ),
                       child: const Icon(Icons.rate_review_outlined,
-                          color: MC.marqueeScore, size: 26),
+                          color: MC.kuvacultScore, size: 26),
                     ),
                     const SizedBox(height: 16),
                     Text('No reviews yet', style: MT.display(size: 20)),
@@ -577,35 +811,117 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
                 ),
               ),
             )
-          else
+          else if (filteredReviews.isEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                child: Center(
+                  child: Text('No reviews match your search',
+                      style: TextStyle(color: MC.dim, fontSize: 13)),
+                ),
+              ),
+            )
+          else ...[
             SliverPadding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (ctx, i) => _ReviewCard(
-                    review: reviews[i],
-                    onLike: () => state.likeReview(reviews[i].id),
+                    key: ValueKey(reviewPageItems[i].id),
+                    review: reviewPageItems[i],
+                    onLike: () => state.likeReview(reviewPageItems[i].id),
                     onUserTap: () => Navigator.push(
                         context,
                         MaterialPageRoute(
                             builder: (_) => UserProfileScreen(
-                                  userId: reviews[i].byId,
-                                  initialName: reviews[i].byName,
+                                  userId: reviewPageItems[i].byId,
+                                  initialName: reviewPageItems[i].byName,
                                 ))),
+                    onDelete: state.currentUser?.id == reviewPageItems[i].byId
+                        ? () => state.deleteReview(reviewPageItems[i].id)
+                        : null,
                   ),
-                  childCount: reviews.length,
+                  childCount: reviewPageItems.length,
                 ),
               ),
             ),
+            if (reviewPageCount > 1)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      GestureDetector(
+                        onTap: currentReviewPage > 0
+                            ? () => setState(
+                                () => _reviewPage = currentReviewPage - 1)
+                            : null,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: currentReviewPage > 0 ? MC.bg1 : MC.bg0,
+                            borderRadius: BorderRadius.circular(10),
+                            border:
+                                Border.all(color: MC.line, width: 0.5),
+                          ),
+                          child: Text('← Prev',
+                              style: TextStyle(
+                                  color: currentReviewPage > 0
+                                      ? MC.ink
+                                      : MC.dim,
+                                  fontSize: 12)),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        '${currentReviewPage + 1} / $reviewPageCount',
+                        style: MT.mono(
+                            size: 11,
+                            letterSpacing: 0.5,
+                            color: MC.mute),
+                      ),
+                      const SizedBox(width: 12),
+                      GestureDetector(
+                        onTap: currentReviewPage < reviewPageCount - 1
+                            ? () => setState(
+                                () => _reviewPage = currentReviewPage + 1)
+                            : null,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: currentReviewPage < reviewPageCount - 1
+                                ? MC.bg1
+                                : MC.bg0,
+                            borderRadius: BorderRadius.circular(10),
+                            border:
+                                Border.all(color: MC.line, width: 0.5),
+                          ),
+                          child: Text('Next →',
+                              style: TextStyle(
+                                  color: currentReviewPage < reviewPageCount - 1
+                                      ? MC.ink
+                                      : MC.dim,
+                                  fontSize: 12)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
 
           const SliverToBoxAdapter(child: SizedBox(height: 120)),
         ],
+        ),
       ),
     );
   }
 }
 
-// ─── Activity Drawer ──────────────────────────────────────────────────────────
 
 class _ActivityDrawer extends StatelessWidget {
   const _ActivityDrawer();
@@ -614,6 +930,16 @@ class _ActivityDrawer extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final activity = state.activity;
+    final invites = state.pendingInvites;
+    final notifs = state.notifications
+        .where((n) =>
+            n.type == NotifType.likedReview ||
+            n.type == NotifType.likedWatchlist ||
+            n.type == NotifType.followed)
+        .toList();
+    final hasContent =
+        activity.isNotEmpty || notifs.isNotEmpty || invites.isNotEmpty;
+
     return Container(
       height: MediaQuery.of(context).size.height * 0.75,
       decoration: const BoxDecoration(
@@ -626,7 +952,7 @@ class _ActivityDrawer extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
             child: Row(
               children: [
-                Text('FRIEND ACTIVITY',
+                Text('ACTIVITY',
                     style: MT.mono(size: 10, letterSpacing: 2)),
                 const Spacer(),
                 GestureDetector(
@@ -638,7 +964,7 @@ class _ActivityDrawer extends StatelessWidget {
             ),
           ),
           Divider(color: MC.line, thickness: 0.5, height: 1),
-          if (activity.isEmpty)
+          if (!hasContent)
             Expanded(
               child: Center(
                 child: Text('No activity yet',
@@ -647,16 +973,48 @@ class _ActivityDrawer extends StatelessWidget {
             )
           else
             Expanded(
-              child: ListView.separated(
+              child: ListView(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                itemCount: activity.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 4),
-                itemBuilder: (ctx, i) => ActivityItem(
-                  event: activity[i],
-                  isLast: i == activity.length - 1,
-                  onMovieTap: (_) {},
-                ),
+                children: [
+                  if (invites.isNotEmpty) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text('WATCHLIST INVITES',
+                          style: MT.mono(
+                              size: 9,
+                              letterSpacing: 2,
+                              color: MC.dim)),
+                    ),
+                    ...invites.map((inv) => _DrawerInviteTile(invite: inv)),
+                    const SizedBox(height: 12),
+                  ],
+                  if (notifs.isNotEmpty) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text('NOTIFICATIONS',
+                          style: MT.mono(size: 9, letterSpacing: 2, color: MC.dim)),
+                    ),
+                    ...notifs.map((n) => _DrawerNotifTile(notif: n)),
+                    const SizedBox(height: 12),
+                  ],
+                  if (activity.isNotEmpty) ...[
+                    if (notifs.isNotEmpty || invites.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text('WATCHLIST ACTIVITY',
+                            style: MT.mono(size: 9, letterSpacing: 2, color: MC.dim)),
+                      ),
+                    ...activity.asMap().entries.map((entry) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: ActivityItem(
+                            event: entry.value,
+                            isLast: entry.key == activity.length - 1,
+                            onMovieTap: (_) {},
+                          ),
+                        )),
+                  ],
+                ],
               ),
             ),
         ],
@@ -665,7 +1023,148 @@ class _ActivityDrawer extends StatelessWidget {
   }
 }
 
-// ─── Explore List Screen ──────────────────────────────────────────────────────
+class _DrawerNotifTile extends StatelessWidget {
+  final AppNotification notif;
+  const _DrawerNotifTile({required this.notif});
+
+  @override
+  Widget build(BuildContext context) {
+    String text;
+    IconData icon;
+    Color iconColor;
+
+    switch (notif.type) {
+      case NotifType.likedReview:
+        text =
+            '${notif.fromName ?? 'Someone'} liked your review of ${notif.movieTitle ?? 'a movie'}';
+        icon = Icons.favorite_rounded;
+        iconColor = const Color(0xFFE05A7A);
+      case NotifType.likedWatchlist:
+        text =
+            '${notif.fromName ?? 'Someone'} liked your watchlist${notif.watchlistName != null ? ' "${notif.watchlistName}"' : ''}';
+        icon = Icons.favorite_rounded;
+        iconColor = const Color(0xFFE05A7A);
+      case NotifType.followed:
+        text = '${notif.fromName ?? 'Someone'} followed you';
+        icon = Icons.person_add_rounded;
+        iconColor = MC.accent1;
+      default:
+        return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: iconColor.withAlpha(25),
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Icon(icon, color: iconColor, size: 14),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(color: MC.ink, fontSize: 12, height: 1.4),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            _timeAgo(notif.at),
+            style: MT.mono(size: 9, letterSpacing: 0, color: MC.mute),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DrawerInviteTile extends StatelessWidget {
+  final WatchlistInvite invite;
+  const _DrawerInviteTile({required this.invite});
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.read<AppState>();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: MC.bg2,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: MC.line, width: 0.5),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: MC.accent1.withAlpha(25),
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: const Icon(Icons.playlist_add_rounded,
+                  color: MC.accent1, size: 16),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${invite.inviterName} invited you to "${invite.watchlistName}"',
+                    style: const TextStyle(
+                        color: MC.ink, fontSize: 12, height: 1.4),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () async {
+                Navigator.pop(context);
+                await state.acceptWatchlistInvite(
+                    invite.watchlistId, invite.id);
+              },
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: MC.accent1,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text('Join',
+                    style: TextStyle(
+                        color: MC.accentInk,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600)),
+              ),
+            ),
+            const SizedBox(width: 6),
+            GestureDetector(
+              onTap: () => state.declineWatchlistInvite(
+                  invite.watchlistId, invite.id),
+              child: const Icon(Icons.close_rounded,
+                  color: MC.dim, size: 16),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 
 class _ExploreListScreen extends StatefulWidget {
   final String type; // 'movies' | 'reviews' | 'watchlists' | 'reviewers'
@@ -677,7 +1176,19 @@ class _ExploreListScreen extends StatefulWidget {
 
 class _ExploreListScreenState extends State<_ExploreListScreen> {
   String _period = 'This Week';
+  int _page = 0;
+  static const _kPageSize = 15;
   static const _periods = ['This Week', 'This Month', 'This Year', 'All Time'];
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.type == 'watchlists') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        context.read<AppState>().loadCommunityTopWatchlists();
+      });
+    }
+  }
 
   String get _title {
     switch (widget.type) {
@@ -702,7 +1213,6 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
       backgroundColor: MC.bg0,
       body: CustomScrollView(
         slivers: [
-          // Header
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 62, 20, 16),
@@ -720,8 +1230,7 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
             ),
           ),
 
-          // Period filter pills (not shown for movies or reviewers)
-          if (widget.type == 'reviews' || widget.type == 'watchlists')
+          if (widget.type == 'reviews')
             SliverToBoxAdapter(
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
@@ -730,7 +1239,8 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
                   children: _periods.map((p) {
                     final isActive = _period == p;
                     return GestureDetector(
-                      onTap: () => setState(() => _period = p),
+                      onTap: () =>
+                          setState(() { _period = p; _page = 0; }),
                       child: Container(
                         margin: const EdgeInsets.only(right: 8),
                         padding: const EdgeInsets.symmetric(
@@ -759,7 +1269,6 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
               ),
             ),
 
-          // Content
           if (widget.type == 'movies') ..._buildMoviesList(state),
           if (widget.type == 'reviews') ..._buildReviewsList(state),
           if (widget.type == 'watchlists') ..._buildWatchlistsList(state),
@@ -767,6 +1276,61 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
 
           const SliverToBoxAdapter(child: SizedBox(height: 120)),
         ],
+      ),
+    );
+  }
+
+  Widget _buildPaginationSliver(int page, int pageCount) {
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            GestureDetector(
+              onTap: page > 0
+                  ? () => setState(() => _page = page - 1)
+                  : null,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: page > 0 ? MC.bg1 : MC.bg0,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: MC.line, width: 0.5),
+                ),
+                child: Text('← Prev',
+                    style: TextStyle(
+                        color: page > 0 ? MC.ink : MC.dim, fontSize: 12)),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              '${page + 1} / $pageCount',
+              style:
+                  MT.mono(size: 11, letterSpacing: 0.5, color: MC.mute),
+            ),
+            const SizedBox(width: 12),
+            GestureDetector(
+              onTap: page < pageCount - 1
+                  ? () => setState(() => _page = page + 1)
+                  : null,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: page < pageCount - 1 ? MC.bg1 : MC.bg0,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: MC.line, width: 0.5),
+                ),
+                child: Text('Next →',
+                    style: TextStyle(
+                        color: page < pageCount - 1 ? MC.ink : MC.dim,
+                        fontSize: 12)),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -787,19 +1351,23 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
         )
       ];
     }
+    final pageCount = (movies.length / _kPageSize).ceil();
+    final page = _page.clamp(0, pageCount - 1);
+    final pageMovies =
+        movies.skip(page * _kPageSize).take(_kPageSize).toList();
     return [
       SliverPadding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         sliver: SliverGrid(
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 3,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: (MediaQuery.of(context).size.width / 180).floor().clamp(3, 8),
             crossAxisSpacing: 8,
             mainAxisSpacing: 8,
             childAspectRatio: 110 / 175,
           ),
           delegate: SliverChildBuilderDelegate(
             (ctx, i) {
-              final m = movies[i];
+              final m = pageMovies[i];
               return GestureDetector(
                 onTap: () => Navigator.push(
                   context,
@@ -812,11 +1380,11 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(8),
                         child: m.poster.imageUrl != null
-                            ? Image.network(
-                                m.poster.imageUrl!,
+                            ? CachedNetworkImage(
+                                imageUrl: m.poster.imageUrl!,
                                 fit: BoxFit.cover,
                                 width: double.infinity,
-                                errorBuilder: (_, __, ___) =>
+                                errorWidget: (_, __, ___) =>
                                     _moviePlaceholder(),
                               )
                             : _moviePlaceholder(),
@@ -833,10 +1401,11 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
                 ),
               );
             },
-            childCount: movies.length,
+            childCount: pageMovies.length,
           ),
         ),
       ),
+      if (pageCount > 1) _buildPaginationSliver(page, pageCount),
     ];
   }
 
@@ -856,33 +1425,41 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
         )
       ];
     }
+    final pageCount = (reviews.length / _kPageSize).ceil();
+    final page = _page.clamp(0, pageCount - 1);
+    final pageReviews =
+        reviews.skip(page * _kPageSize).take(_kPageSize).toList();
     return [
       SliverPadding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         sliver: SliverList(
           delegate: SliverChildBuilderDelegate(
             (ctx, i) => _ReviewCard(
-              review: reviews[i],
-              onLike: () => state.likeReview(reviews[i].id),
+              key: ValueKey(pageReviews[i].id),
+              review: pageReviews[i],
+              onLike: () => state.likeReview(pageReviews[i].id),
               onUserTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
                     builder: (_) => UserProfileScreen(
-                          userId: reviews[i].byId,
-                          initialName: reviews[i].byName,
+                          userId: pageReviews[i].byId,
+                          initialName: pageReviews[i].byName,
                         )),
               ),
+              onDelete: state.currentUser?.id == pageReviews[i].byId
+                  ? () => state.deleteReview(pageReviews[i].id)
+                  : null,
             ),
-            childCount: reviews.length,
+            childCount: pageReviews.length,
           ),
         ),
       ),
+      if (pageCount > 1) _buildPaginationSliver(page, pageCount),
     ];
   }
 
   List<Widget> _buildWatchlistsList(AppState state) {
-    final watchlists = List.of(state.watchlists)
-      ..sort((a, b) => b.likes.compareTo(a.likes));
+    final watchlists = state.communityTopWatchlists;
     if (watchlists.isEmpty) {
       return [
         SliverToBoxAdapter(
@@ -896,70 +1473,48 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
         )
       ];
     }
+    final pageCount = (watchlists.length / _kPageSize).ceil();
+    final page = _page.clamp(0, pageCount - 1);
+    final pageWatchlists =
+        watchlists.skip(page * _kPageSize).take(_kPageSize).toList();
     return [
       SliverPadding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        sliver: SliverList(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+        sliver: SliverGrid(
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 260,
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+            childAspectRatio: 0.68,
+          ),
           delegate: SliverChildBuilderDelegate(
             (ctx, i) {
-              final wl = watchlists[i];
-              return Container(
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: MC.bg1,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: MC.line, width: 0.5),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(wl.name,
-                              style: const TextStyle(
-                                  color: MC.ink,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600)),
-                          Text('${wl.movies.length} movies',
-                              style: MT.mono(
-                                  size: 10, letterSpacing: 0, color: MC.dim)),
-                        ],
-                      ),
-                    ),
-                    GestureDetector(
-                      onTap: () => state.likeWatchlist(wl.id),
-                      child: Row(
-                        children: [
-                          Icon(
-                            wl.likedByMe
-                                ? Icons.favorite_rounded
-                                : Icons.favorite_border_rounded,
-                            size: 16,
-                            color: wl.likedByMe
-                                ? const Color(0xFFE05A7A)
-                                : MC.dim,
-                          ),
-                          const SizedBox(width: 4),
-                          Text('${wl.likes}',
-                              style: MT.mono(
-                                  size: 10,
-                                  letterSpacing: 0,
-                                  color: wl.likedByMe
-                                      ? const Color(0xFFE05A7A)
-                                      : MC.dim)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
+              final wl = pageWatchlists[i];
+              final watchlistId = wl['id'] as String? ?? '';
+              final name = wl['name'] as String? ?? '';
+              final movieCount = wl['movieCount'] as int? ?? 0;
+              final likes = wl['likes'] as int? ?? 0;
+              final isLiked = watchlistId.isNotEmpty &&
+                  state.isCommunityWatchlistLiked(watchlistId);
+              return _WatchlistGridPosterCard(
+                watchlistId: watchlistId,
+                name: name,
+                movieCount: movieCount,
+                likes: likes,
+                isLiked: isLiked,
+                onTap: watchlistId.isNotEmpty
+                    ? () => _openCommunityWatchlist(context, watchlistId, name, initialLikes: likes)
+                    : () {},
+                onLike: watchlistId.isNotEmpty
+                    ? () => state.likeCommunityWatchlist(watchlistId)
+                    : () {},
               );
             },
-            childCount: watchlists.length,
+            childCount: pageWatchlists.length,
           ),
         ),
       ),
+      if (pageCount > 1) _buildPaginationSliver(page, pageCount),
     ];
   }
 
@@ -978,13 +1533,17 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
         )
       ];
     }
+    final pageCount = (reviewers.length / _kPageSize).ceil();
+    final page = _page.clamp(0, pageCount - 1);
+    final pageReviewers =
+        reviewers.skip(page * _kPageSize).take(_kPageSize).toList();
     return [
       SliverPadding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         sliver: SliverList(
           delegate: SliverChildBuilderDelegate(
             (ctx, i) {
-              final r = reviewers[i];
+              final r = pageReviewers[i];
               return GestureDetector(
                 onTap: () => Navigator.push(
                   context,
@@ -1010,6 +1569,7 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
                             r['avatarColor'] as Color? ?? MC.accent1,
                         name: r['name'] as String? ?? '',
                         size: 40,
+                        userId: r['userId'] as String?,
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -1034,7 +1594,7 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
                         children: [
                           Text('${r['reviewCount']}',
                               style: TextStyle(
-                                  color: MC.marqueeScore,
+                                  color: MC.kuvacultScore,
                                   fontSize: 16,
                                   fontWeight: FontWeight.w700)),
                           Text('reviews',
@@ -1047,26 +1607,36 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
                 ),
               );
             },
-            childCount: reviewers.length,
+            childCount: pageReviewers.length,
           ),
         ),
       ),
+      if (pageCount > 1) _buildPaginationSliver(page, pageCount),
     ];
   }
 }
 
-// ─── Review Card ──────────────────────────────────────────────────────────────
 
-class _ReviewCard extends StatelessWidget {
+class _ReviewCard extends StatefulWidget {
   final Review review;
   final VoidCallback onLike;
   final VoidCallback onUserTap;
+  final VoidCallback? onDelete;
 
   const _ReviewCard({
+    super.key,
     required this.review,
     required this.onLike,
     required this.onUserTap,
+    this.onDelete,
   });
+
+  @override
+  State<_ReviewCard> createState() => _ReviewCardState();
+}
+
+class _ReviewCardState extends State<_ReviewCard> {
+  bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
@@ -1080,29 +1650,29 @@ class _ReviewCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Author row
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
             child: Row(
               children: [
                 GestureDetector(
-                  onTap: onUserTap,
+                  onTap: widget.onUserTap,
                   child: _AvatarWidget(
-                    avatarUrl: review.byAvatarUrl,
-                    avatarColor: review.byAvatarColor,
-                    name: review.byName,
+                    avatarUrl: widget.review.byAvatarUrl,
+                    avatarColor: widget.review.byAvatarColor,
+                    name: widget.review.byName,
                     size: 34,
+                    userId: widget.review.byId,
                   ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: GestureDetector(
-                    onTap: onUserTap,
+                    onTap: widget.onUserTap,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          review.byName,
+                          widget.review.byName,
                           style: const TextStyle(
                             color: MC.ink,
                             fontSize: 13,
@@ -1111,7 +1681,7 @@ class _ReviewCard extends StatelessWidget {
                           ),
                         ),
                         Text(
-                          '@${review.byHandle}',
+                          '@${widget.review.byHandle}',
                           style: MT.mono(
                               size: 10,
                               letterSpacing: 0.5,
@@ -1121,111 +1691,171 @@ class _ReviewCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                Text(_timeAgo(review.at),
+                Text(_timeAgo(widget.review.at),
                     style: MT.mono(
                         size: 10, letterSpacing: 0, color: MC.dim)),
               ],
             ),
           ),
 
-          // Movie row
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
             child: Row(
               children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: review.moviePosterUrl != null
-                      ? Image.network(
-                          review.moviePosterUrl!,
-                          width: 44,
-                          height: 66,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => _posterPlaceholder(),
-                        )
-                      : _posterPlaceholder(),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                GestureDetector(
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => DetailScreen(
+                        movie: _reviewToStubMovie(widget.review),
+                        scrollToReviewId: widget.review.id,
+                      ),
+                    ),
+                  ),
+                  child: Stack(
                     children: [
-                      Text(
-                        review.movieTitle,
-                        style: MT.display(size: 15, letterSpacing: -0.3),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: widget.review.moviePosterUrl != null
+                            ? CachedNetworkImage(
+                                imageUrl: widget.review.moviePosterUrl!,
+                                width: 44,
+                                height: 66,
+                                fit: BoxFit.cover,
+                                errorWidget: (_, __, ___) => _posterPlaceholder(),
+                              )
+                            : _posterPlaceholder(),
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${review.movieYear}${review.movieDirector.isNotEmpty ? '  ·  ${review.movieDirector}' : ''}',
-                        style: MT.mono(
-                            size: 10, letterSpacing: 0, color: MC.mute),
-                      ),
-                      const SizedBox(height: 6),
-                      _StarRow(stars: review.stars),
-                      if (review.rewatch)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Row(
-                            children: [
-                              Icon(Icons.replay_rounded,
-                                  size: 11,
-                                  color: MC.marqueeScore.withAlpha(200)),
-                              const SizedBox(width: 3),
-                              Text('Rewatch',
-                                  style: MT.mono(
-                                      size: 9,
-                                      letterSpacing: 0,
-                                      color: MC.marqueeScore)),
-                            ],
+                      if (context.watch<AppState>().isWatched(widget.review.movieId))
+                        Positioned(
+                          bottom: 3,
+                          right: 3,
+                          child: Container(
+                            width: 16,
+                            height: 16,
+                            decoration: BoxDecoration(
+                              color: Colors.black.withAlpha(160),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Icon(
+                              Icons.remove_red_eye_rounded,
+                              size: 10,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                     ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => DetailScreen(
+                          movie: _reviewToStubMovie(widget.review),
+                          scrollToReviewId: widget.review.id,
+                        ),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.review.movieTitle,
+                          style: MT.display(size: 15, letterSpacing: -0.3),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${widget.review.movieYear}${widget.review.movieDirector.isNotEmpty ? '  ·  ${widget.review.movieDirector}' : ''}',
+                          style: MT.mono(
+                              size: 10, letterSpacing: 0, color: MC.mute),
+                        ),
+                        const SizedBox(height: 6),
+                        _StarRow(stars: widget.review.stars),
+                        if (widget.review.rewatch)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Row(
+                              children: [
+                                Icon(Icons.replay_rounded,
+                                    size: 11,
+                                    color: MC.kuvacultScore.withAlpha(200)),
+                                const SizedBox(width: 3),
+                                Text('Rewatch',
+                                    style: MT.mono(
+                                        size: 9,
+                                        letterSpacing: 0,
+                                        color: MC.kuvacultScore)),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ],
             ),
           ),
 
-          // Review text
-          if (review.text.isNotEmpty)
+          if (widget.review.text.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-              child: Text(
-                review.text,
-                style:
-                    const TextStyle(fontSize: 13, color: MC.ink, height: 1.5),
-                maxLines: 4,
-                overflow: TextOverflow.ellipsis,
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ReviewText(
+                    text: widget.review.text,
+                    style: const TextStyle(fontSize: 13, color: MC.ink, height: 1.5),
+                    maxLines: _expanded ? 15 : 4,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (widget.review.text.length > 150) ...[
+                    const SizedBox(height: 4),
+                    GestureDetector(
+                      onTap: () => setState(() => _expanded = !_expanded),
+                      child: Text(
+                        _expanded ? 'Show less' : 'Read more',
+                        style: TextStyle(
+                          color: _expanded ? MC.dim : MC.accent1,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 6),
+                ],
               ),
             ),
 
-          // Actions row
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
             child: Row(
               children: [
                 GestureDetector(
-                  onTap: onLike,
+                  onTap: widget.onLike,
                   child: Row(
                     children: [
                       Icon(
-                        review.likedByMe
+                        widget.review.likedByMe
                             ? Icons.favorite_rounded
                             : Icons.favorite_border_rounded,
                         size: 16,
-                        color: review.likedByMe
+                        color: widget.review.likedByMe
                             ? const Color(0xFFE05A7A)
                             : MC.dim,
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        '${review.likes}',
+                        '${widget.review.likes}',
                         style: MT.mono(
                             size: 10,
                             letterSpacing: 0,
-                            color: review.likedByMe
+                            color: widget.review.likedByMe
                                 ? const Color(0xFFE05A7A)
                                 : MC.dim),
                       ),
@@ -1233,18 +1863,37 @@ class _ReviewCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 16),
-                Row(
-                  children: [
-                    const Icon(Icons.mode_comment_outlined,
-                        size: 14, color: MC.dim),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${review.commentCount}',
-                      style:
-                          MT.mono(size: 10, letterSpacing: 0, color: MC.dim),
+                GestureDetector(
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => DetailScreen(
+                        movie: _reviewToStubMovie(widget.review),
+                        scrollToReviewId: widget.review.id,
+                      ),
                     ),
-                  ],
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.mode_comment_outlined,
+                          size: 14, color: MC.dim),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${widget.review.commentCount}',
+                        style:
+                            MT.mono(size: 10, letterSpacing: 0, color: MC.dim),
+                      ),
+                    ],
+                  ),
                 ),
+                if (widget.onDelete != null) ...[
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: () => _confirmDelete(context),
+                    child: const Icon(Icons.delete_outline_rounded,
+                        size: 16, color: MC.dim),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1252,6 +1901,56 @@ class _ReviewCard extends StatelessWidget {
       ),
     );
   }
+
+  void _confirmDelete(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: MC.bg1,
+        title: const Text('Delete review?',
+            style: TextStyle(color: MC.ink, fontSize: 16, fontWeight: FontWeight.w600)),
+        content: const Text('This cannot be undone.',
+            style: TextStyle(color: MC.dim, fontSize: 13)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: MC.dim)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              widget.onDelete?.call();
+            },
+            child: const Text('Delete',
+                style: TextStyle(color: Color(0xFFE05A7A), fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Movie _reviewToStubMovie(Review r) => Movie(
+    id: r.movieId,
+    title: r.movieTitle,
+    year: r.movieYear,
+    runtime: 0,
+    rating: 0,
+    genres: [],
+    director: r.movieDirector,
+    streamId: '',
+    addedBy: '',
+    section: WatchSection.want,
+    synopsis: '',
+    poster: PosterData(
+      gradient: const LinearGradient(
+        colors: [Color(0xFF1C1C2E), Color(0xFF2D2D44)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      accent: const Color(0xFFF6C453),
+      imageUrl: r.moviePosterUrl,
+    ),
+  );
 
   Widget _posterPlaceholder() => Container(
         width: 44,
@@ -1264,32 +1963,57 @@ class _ReviewCard extends StatelessWidget {
       );
 }
 
-// ─── Shared widgets ───────────────────────────────────────────────────────────
 
 class _AvatarWidget extends StatelessWidget {
   final String? avatarUrl;
   final Color avatarColor;
   final String name;
   final double size;
+  final String? userId;
 
   const _AvatarWidget({
     required this.avatarUrl,
     required this.avatarColor,
     required this.name,
     required this.size,
+    this.userId,
   });
 
   @override
   Widget build(BuildContext context) {
+    String? resolvedUrl = avatarUrl;
+
+    if (userId != null) {
+      final state = context.watch<AppState>();
+      if (userId == state.currentUser?.id) {
+        // Always use live data for the current user (avatar may have changed this session)
+        resolvedUrl = state.currentUser?.avatarUrl ?? avatarUrl;
+      } else if ((avatarUrl ?? '').isEmpty) {
+        // Only look up from state when the review didn't carry an avatar URL
+        final friend = state.friends.cast<UserAccount?>().firstWhere(
+            (f) => f?.id == userId,
+            orElse: () => null);
+        if (friend != null) {
+          resolvedUrl = friend.avatarUrl;
+        } else {
+          final member = state.memberProfiles[userId!];
+          if (member != null) resolvedUrl = member.avatarUrl;
+        }
+      }
+    }
+
     final initial = name.isNotEmpty ? name[0].toUpperCase() : '?';
-    if (avatarUrl != null && avatarUrl!.isNotEmpty) {
+    if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
+      final url = resolvedUrl.startsWith('/')
+          ? '${Config.httpBase}$resolvedUrl'
+          : resolvedUrl;
       return ClipOval(
-        child: Image.network(
-          avatarUrl!,
+        child: CachedNetworkImage(
+          imageUrl: url,
           width: size,
           height: size,
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => _initials(initial),
+          errorWidget: (_, __, ___) => _initials(initial),
         ),
       );
     }
@@ -1333,12 +2057,38 @@ class _StarRow extends StatelessWidget {
                     ? Icons.star_rounded
                     : Icons.star_border_rounded,
             size: 14,
-            color: MC.marqueeScore,
+            color: MC.kuvacultScore,
           ),
         );
       }),
     );
   }
+}
+
+void _openCommunityWatchlist(BuildContext context, String watchlistId, String name, {int initialLikes = 0}) {
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => PublicWatchlistScreen(
+        watchlistId: watchlistId,
+        name: name,
+        initialLikes: initialLikes,
+      ),
+    ),
+  );
+}
+
+Widget _avatarFallback(String name) {
+  final initial = name.isNotEmpty ? name[0].toUpperCase() : '?';
+  return Container(
+    width: 36, height: 36,
+    color: const Color(0xFF3A3A4A),
+    child: Center(
+      child: Text(initial,
+          style: const TextStyle(
+              color: MC.ink, fontSize: 14, fontWeight: FontWeight.w600)),
+    ),
+  );
 }
 
 Widget _moviePlaceholder() => Container(
@@ -1351,7 +2101,612 @@ Widget _moviePlaceholder() => Container(
       child: const Icon(Icons.movie_outlined, color: MC.dim, size: 24),
     );
 
-// ─── Write review bottom sheet ────────────────────────────────────────────────
+final _communityPosterCache = <String, List<String>>{};
+
+Future<List<String>> _fetchCommunityPosters(String watchlistId) async {
+  if (_communityPosterCache.containsKey(watchlistId)) {
+    return _communityPosterCache[watchlistId]!;
+  }
+  try {
+    final data = await ApiService.fetchWatchlistById(watchlistId);
+    final movies = data['movies'] as List? ?? [];
+    final urls = movies
+        .map((m) => (m as Map<String, dynamic>)['imageUrl'] as String? ?? '')
+        .where((u) => u.isNotEmpty)
+        .take(4)
+        .toList();
+    return _communityPosterCache[watchlistId] = urls;
+  } catch (_) {
+    return _communityPosterCache[watchlistId] = [];
+  }
+}
+
+class _WatchlistFanCard extends StatefulWidget {
+  final String watchlistId;
+  final String name;
+  final int movieCount;
+  final int likes;
+  final bool isLiked;
+  final VoidCallback onTap;
+  final VoidCallback onLike;
+
+  const _WatchlistFanCard({
+    required this.watchlistId,
+    required this.name,
+    required this.movieCount,
+    required this.likes,
+    required this.isLiked,
+    required this.onTap,
+    required this.onLike,
+  });
+
+  @override
+  State<_WatchlistFanCard> createState() => _WatchlistFanCardState();
+}
+
+class _WatchlistFanCardState extends State<_WatchlistFanCard> {
+  List<String> _posters = [];
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.watchlistId.isNotEmpty) {
+      _fetchCommunityPosters(widget.watchlistId).then((urls) {
+        if (mounted) setState(() => _posters = urls);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: Container(
+        width: 160,
+        margin: const EdgeInsets.only(right: 12),
+        decoration: BoxDecoration(
+          color: MC.bg1,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: MC.line, width: 0.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: ClipRRect(
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(11)),
+                child: _buildFan(),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(widget.name,
+                      style: const TextStyle(
+                          color: MC.ink, fontSize: 12, fontWeight: FontWeight.w600),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      Text('${widget.movieCount} films',
+                          style: MT.mono(size: 9, letterSpacing: 0, color: MC.dim)),
+                      const Spacer(),
+                      GestureDetector(
+                        onTap: widget.onLike,
+                        child: Row(children: [
+                          Icon(
+                            widget.isLiked
+                                ? Icons.favorite_rounded
+                                : Icons.favorite_border_rounded,
+                            size: 13,
+                            color: widget.isLiked
+                                ? const Color(0xFFE05A7A)
+                                : MC.dim,
+                          ),
+                          const SizedBox(width: 3),
+                          Text('${widget.likes}',
+                              style: MT.mono(
+                                  size: 9,
+                                  letterSpacing: 0,
+                                  color: widget.isLiked
+                                      ? const Color(0xFFE05A7A)
+                                      : MC.dim)),
+                        ]),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFan() {
+    if (_posters.isEmpty) {
+      return Container(
+        color: MC.bg2,
+        child: const Center(child: Icon(Icons.movie_outlined, color: MC.dim, size: 26)),
+      );
+    }
+
+    final count = _posters.length.clamp(1, 4);
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // Equal-width strips, edge to edge, no background showing
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (int i = 0; i < count; i++) ...[
+              if (i > 0)
+                Container(width: 1, color: Colors.black.withOpacity(0.25)),
+              Expanded(
+                child: CachedNetworkImage(
+                  imageUrl: _posters[i],
+                  fit: BoxFit.cover,
+                  memCacheWidth: 100,
+                  fadeInDuration: const Duration(milliseconds: 200),
+                  placeholder: (_, __) => Container(color: MC.bg2),
+                  errorWidget: (_, __, ___) => Container(color: MC.bg2),
+                ),
+              ),
+            ],
+          ],
+        ),
+        // Subtle bottom vignette so the card edge reads cleanly
+        Positioned(
+          left: 0, right: 0, bottom: 0,
+          height: 28,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.transparent, Colors.black.withOpacity(0.55)],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _WatchlistGridPosterCard extends StatefulWidget {
+  final String watchlistId;
+  final String name;
+  final int movieCount;
+  final int likes;
+  final bool isLiked;
+  final VoidCallback onTap;
+  final VoidCallback onLike;
+
+  const _WatchlistGridPosterCard({
+    required this.watchlistId,
+    required this.name,
+    required this.movieCount,
+    required this.likes,
+    required this.isLiked,
+    required this.onTap,
+    required this.onLike,
+  });
+
+  @override
+  State<_WatchlistGridPosterCard> createState() => _WatchlistGridPosterCardState();
+}
+
+class _WatchlistGridPosterCardState extends State<_WatchlistGridPosterCard> {
+  List<String> _posters = [];
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.watchlistId.isNotEmpty) {
+      _fetchCommunityPosters(widget.watchlistId).then((urls) {
+        if (mounted) setState(() => _posters = urls);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          color: MC.bg1,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: MC.line, width: 0.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              flex: 3,
+              child: ClipRRect(
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(13)),
+                child: _buildMosaic(),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(widget.name,
+                      style: MT.display(size: 13, letterSpacing: -0.3),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Text(
+                        '${widget.movieCount} ${widget.movieCount == 1 ? 'film' : 'films'}',
+                        style: MT.mono(size: 9, letterSpacing: 1, color: MC.mute),
+                      ),
+                      const Spacer(),
+                      GestureDetector(
+                        onTap: widget.onLike,
+                        child: Row(children: [
+                          Icon(
+                            widget.isLiked
+                                ? Icons.favorite_rounded
+                                : Icons.favorite_border_rounded,
+                            size: 13,
+                            color: widget.isLiked
+                                ? const Color(0xFFE05A7A)
+                                : MC.dim,
+                          ),
+                          const SizedBox(width: 3),
+                          Text('${widget.likes}',
+                              style: MT.mono(
+                                  size: 9,
+                                  letterSpacing: 0,
+                                  color: widget.isLiked
+                                      ? const Color(0xFFE05A7A)
+                                      : MC.dim)),
+                        ]),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMosaic() {
+    Widget img(String url) => SizedBox.expand(
+      child: CachedNetworkImage(
+        imageUrl: url,
+        fit: BoxFit.cover,
+        memCacheWidth: 200,
+        fadeInDuration: const Duration(milliseconds: 200),
+        placeholder: (_, __) => Container(color: MC.bg2),
+        errorWidget: (_, __, ___) => Container(color: MC.bg2),
+      ),
+    );
+    if (_posters.isEmpty) {
+      return Container(
+        color: MC.bg2,
+        child: const Center(child: Icon(Icons.movie_outlined, color: MC.dim, size: 32)),
+      );
+    }
+    if (_posters.length == 1) return img(_posters[0]);
+    if (_posters.length < 4) {
+      return Row(children: [
+        Expanded(child: img(_posters[0])),
+        const SizedBox(width: 1),
+        Expanded(child: img(_posters[1])),
+      ]);
+    }
+    return Column(children: [
+      Expanded(child: Row(children: [
+        Expanded(child: img(_posters[0])),
+        const SizedBox(width: 1),
+        Expanded(child: img(_posters[1])),
+      ])),
+      const SizedBox(height: 1),
+      Expanded(child: Row(children: [
+        Expanded(child: img(_posters[2])),
+        const SizedBox(width: 1),
+        Expanded(child: img(_posters[3])),
+      ])),
+    ]);
+  }
+}
+
+class _WatchlistMoviesScreen extends StatefulWidget {
+  final Watchlist watchlist;
+  const _WatchlistMoviesScreen({required this.watchlist});
+
+  @override
+  State<_WatchlistMoviesScreen> createState() => _WatchlistMoviesScreenState();
+}
+
+class _WatchlistMoviesScreenState extends State<_WatchlistMoviesScreen> {
+  String _search = '';
+  int _page = 0;
+  static const _kPageSize = 18;
+  final _searchCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    // Pull from live state so likes update reactively
+    final wl = state.watchlists.cast<Watchlist?>().firstWhere(
+          (w) => w?.id == widget.watchlist.id,
+          orElse: () => null,
+        ) ??
+        widget.watchlist;
+
+    final allMovies = wl.movies;
+    final filtered = _search.isEmpty
+        ? allMovies
+        : allMovies
+            .where((m) =>
+                m.title.toLowerCase().contains(_search.toLowerCase()))
+            .toList();
+    final pageCount =
+        filtered.isEmpty ? 0 : (filtered.length / _kPageSize).ceil();
+    final page = pageCount == 0 ? 0 : _page.clamp(0, pageCount - 1);
+    final pageMovies =
+        filtered.skip(page * _kPageSize).take(_kPageSize).toList();
+
+    return Scaffold(
+      backgroundColor: MC.bg0,
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 62, 20, 12),
+              child: Row(
+                children: [
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: const Icon(Icons.arrow_back_ios_new_rounded,
+                        color: MC.ink, size: 18),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(wl.name, style: MT.display(size: 26)),
+                  ),
+                  GestureDetector(
+                    onTap: () => state.likeWatchlist(wl.id),
+                    child: Row(
+                      children: [
+                        Icon(
+                          wl.likedByMe
+                              ? Icons.favorite_rounded
+                              : Icons.favorite_border_rounded,
+                          size: 20,
+                          color: wl.likedByMe
+                              ? const Color(0xFFE05A7A)
+                              : MC.dim,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${wl.likes}',
+                          style: MT.mono(
+                              size: 12,
+                              letterSpacing: 0,
+                              color: wl.likedByMe
+                                  ? const Color(0xFFE05A7A)
+                                  : MC.dim),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+              child: Text(
+                '${allMovies.length} movie${allMovies.length == 1 ? '' : 's'}',
+                style: MT.mono(size: 10, letterSpacing: 1, color: MC.dim),
+              ),
+            ),
+          ),
+
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: TextField(
+                controller: _searchCtrl,
+                style: const TextStyle(color: MC.ink, fontSize: 13),
+                onChanged: (v) =>
+                    setState(() { _search = v; _page = 0; }),
+                decoration: InputDecoration(
+                  hintText: 'Search movies…',
+                  hintStyle: const TextStyle(color: MC.dim, fontSize: 13),
+                  prefixIcon:
+                      const Icon(Icons.search_rounded, color: MC.dim, size: 18),
+                  suffixIcon: _search.isNotEmpty
+                      ? GestureDetector(
+                          onTap: () {
+                            setState(() { _search = ''; _page = 0; });
+                            _searchCtrl.clear();
+                          },
+                          child: const Icon(Icons.close_rounded,
+                              color: MC.dim, size: 16),
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: MC.bg1,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: MC.line, width: 0.5),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: MC.line, width: 0.5),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide:
+                        const BorderSide(color: MC.kuvacultScore, width: 1),
+                  ),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                ),
+              ),
+            ),
+          ),
+
+          if (filtered.isEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.all(40),
+                child: Center(
+                  child: Text(
+                    _search.isNotEmpty
+                        ? 'No movies match your search'
+                        : 'No movies in this watchlist yet',
+                    style: const TextStyle(color: MC.dim, fontSize: 13),
+                  ),
+                ),
+              ),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              sliver: SliverGrid(
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: (MediaQuery.of(context).size.width / 180).floor().clamp(3, 8),
+                  crossAxisSpacing: 8,
+                  mainAxisSpacing: 12,
+                  childAspectRatio: 110 / 185,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (ctx, i) {
+                    final m = pageMovies[i];
+                    return GestureDetector(
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => DetailScreen(movie: m)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: m.poster.imageUrl != null
+                                  ? CachedNetworkImage(
+                                      imageUrl: m.poster.imageUrl!,
+                                      fit: BoxFit.cover,
+                                      width: double.infinity,
+                                      errorWidget: (_, __, ___) =>
+                                          _moviePlaceholder(),
+                                    )
+                                  : _moviePlaceholder(),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            m.title,
+                            style: const TextStyle(
+                                color: MC.ink, fontSize: 11),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            '${m.year}',
+                            style: MT.mono(
+                                size: 9, letterSpacing: 0, color: MC.dim),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                  childCount: pageMovies.length,
+                ),
+              ),
+            ),
+
+          if (pageCount > 1)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    GestureDetector(
+                      onTap: page > 0
+                          ? () => setState(() => _page = page - 1)
+                          : null,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: page > 0 ? MC.bg1 : MC.bg0,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: MC.line, width: 0.5),
+                        ),
+                        child: Text('← Prev',
+                            style: TextStyle(
+                                color: page > 0 ? MC.ink : MC.dim,
+                                fontSize: 12)),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Text('${page + 1} / $pageCount',
+                        style: MT.mono(
+                            size: 11, letterSpacing: 0.5, color: MC.mute)),
+                    const SizedBox(width: 12),
+                    GestureDetector(
+                      onTap: page < pageCount - 1
+                          ? () => setState(() => _page = page + 1)
+                          : null,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: page < pageCount - 1 ? MC.bg1 : MC.bg0,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: MC.line, width: 0.5),
+                        ),
+                        child: Text('Next →',
+                            style: TextStyle(
+                                color:
+                                    page < pageCount - 1 ? MC.ink : MC.dim,
+                                fontSize: 12)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          const SliverToBoxAdapter(child: SizedBox(height: 120)),
+        ],
+      ),
+    );
+  }
+}
+
 
 Future<void> showWriteReviewSheet(
   BuildContext context, {
@@ -1489,7 +2844,7 @@ class _WriteReviewSheetState extends State<_WriteReviewSheet> {
                               ? Icons.star_half_rounded
                               : Icons.star_border_rounded,
                       size: 36,
-                      color: MC.marqueeScore,
+                      color: MC.kuvacultScore,
                     ),
                   ),
                 ),
@@ -1498,7 +2853,7 @@ class _WriteReviewSheetState extends State<_WriteReviewSheet> {
                   Text(
                     '${_stars % 1 == 0 ? _stars.toInt() : _stars} / 5',
                     style: MT.mono(
-                        size: 14, color: MC.marqueeScore, letterSpacing: 1),
+                        size: 14, color: MC.kuvacultScore, letterSpacing: 1),
                   ),
                 ],
               ],
@@ -1517,22 +2872,22 @@ class _WriteReviewSheetState extends State<_WriteReviewSheet> {
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(4),
                     border: Border.all(
-                        color: _rewatch ? MC.marqueeScore : MC.dim,
+                        color: _rewatch ? MC.kuvacultScore : MC.dim,
                         width: 1.5),
                     color: _rewatch
-                        ? MC.marqueeScore.withAlpha(30)
+                        ? MC.kuvacultScore.withAlpha(30)
                         : Colors.transparent,
                   ),
                   child: _rewatch
                       ? const Icon(Icons.check_rounded,
-                          size: 12, color: MC.marqueeScore)
+                          size: 12, color: MC.kuvacultScore)
                       : null,
                 ),
                 const SizedBox(width: 8),
                 Text('Rewatch',
                     style: TextStyle(
                         fontSize: 13,
-                        color: _rewatch ? MC.marqueeScore : MC.mute)),
+                        color: _rewatch ? MC.kuvacultScore : MC.mute)),
               ],
             ),
           ),
@@ -1556,7 +2911,7 @@ class _WriteReviewSheetState extends State<_WriteReviewSheet> {
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide:
-                    const BorderSide(color: MC.marqueeScore, width: 1),
+                    const BorderSide(color: MC.kuvacultScore, width: 1),
               ),
             ),
           ),
@@ -1570,28 +2925,36 @@ class _WriteReviewSheetState extends State<_WriteReviewSheet> {
                 ? null
                 : () async {
                     setState(() => _submitting = true);
-                    await context.read<AppState>().submitReview(
-                          movieId: widget.movieId,
-                          movieTitle: widget.movieTitle,
-                          movieYear: widget.movieYear,
-                          movieDirector: widget.movieDirector,
-                          moviePosterUrl: widget.moviePosterUrl,
-                          stars: _stars,
-                          text: _ctrl.text.trim(),
-                          rewatch: _rewatch,
+                    try {
+                      await context.read<AppState>().submitReview(
+                            movieId: widget.movieId,
+                            movieTitle: widget.movieTitle,
+                            movieYear: widget.movieYear,
+                            movieDirector: widget.movieDirector,
+                            moviePosterUrl: widget.moviePosterUrl,
+                            stars: _stars,
+                            text: _ctrl.text.trim(),
+                            rewatch: _rewatch,
+                          );
+                      if (context.mounted) Navigator.pop(context);
+                    } catch (e) {
+                      if (context.mounted) {
+                        setState(() => _submitting = false);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Failed to post review: $e'),
+                            backgroundColor: Colors.red[800],
+                          ),
                         );
-                    if (context.mounted) Navigator.pop(context);
+                      }
+                    }
                   },
             child: Container(
               width: double.infinity,
               height: 48,
               decoration: BoxDecoration(
-                gradient: (_stars > 0 && _ctrl.text.trim().isNotEmpty)
-                    ? const LinearGradient(
-                        colors: [MC.marqueeScore, Color(0xFF3AB8BF)])
-                    : null,
                 color: (_stars > 0 && _ctrl.text.trim().isNotEmpty)
-                    ? null
+                    ? MC.kuvacultScore
                     : MC.bg2,
                 borderRadius: BorderRadius.circular(14),
               ),
@@ -1601,12 +2964,12 @@ class _WriteReviewSheetState extends State<_WriteReviewSheet> {
                       width: 20,
                       height: 20,
                       child: CircularProgressIndicator(
-                          color: MC.marqueeScoreInk, strokeWidth: 2))
+                          color: MC.kuvacultScoreInk, strokeWidth: 2))
                   : Text(
                       'Post review',
                       style: TextStyle(
                         color: (_stars > 0 && _ctrl.text.trim().isNotEmpty)
-                            ? MC.marqueeScoreInk
+                            ? MC.kuvacultScoreInk
                             : MC.dim,
                         fontWeight: FontWeight.w600,
                         fontSize: 14,

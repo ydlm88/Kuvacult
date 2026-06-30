@@ -1,8 +1,9 @@
+// activity.dart — Shows a filterable feed of watchlist activity events (notes, reactions, ratings, moves, reviews) for the current user.
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme.dart';
 import '../models.dart';
-import '../mock_data.dart';
 import '../app_state.dart';
 import '../widgets/avatar.dart';
 import '../widgets/poster.dart';
@@ -37,9 +38,12 @@ class _ActivityScreenState extends State<ActivityScreen> {
 
     return Scaffold(
       backgroundColor: MC.bg0,
-      body: CustomScrollView(
-        slivers: [
-          // ── Header ────────────────────────────────────────────────────────
+      body: RefreshIndicator(
+        color: MC.accent1,
+        backgroundColor: MC.bg1,
+        onRefresh: () => context.read<AppState>().refreshActivity(),
+        child: CustomScrollView(
+          slivers: [
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 62, 20, 12),
@@ -55,7 +59,6 @@ class _ActivityScreenState extends State<ActivityScreen> {
             ),
           ),
 
-          // ── Filter chips ──────────────────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.only(bottom: 12),
@@ -67,9 +70,6 @@ class _ActivityScreenState extends State<ActivityScreen> {
             ),
           ),
 
-          // ── Activity list or empty state ───────────────────────────────────
-          // TODO(backend): Paginate activity feed — GET /watchlists/:id/activity?page=N
-          // Add pull-to-refresh to fetch latest events from the server.
           if (filtered.isEmpty)
             SliverToBoxAdapter(
               child: Padding(
@@ -112,6 +112,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
 
           const SliverToBoxAdapter(child: SizedBox(height: 120)),
         ],
+        ),
       ),
     );
   }
@@ -156,7 +157,7 @@ class ActivityItem extends StatelessWidget {
         ? 'Everyone'
         : event.who == currentUser?.id
             ? currentUser!.displayName
-            : (profile?.displayName ?? kMembers[event.who]?.name ?? '?');
+            : (profile?.displayName ?? '?');
 
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 14),
@@ -168,16 +169,13 @@ class ActivityItem extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Avatar
           AvatarWidget(memberId: event.who, size: 32),
           const SizedBox(width: 14),
 
-          // Content
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Description text
                 Text.rich(
                   TextSpan(
                     style: const TextStyle(
@@ -193,7 +191,6 @@ class ActivityItem extends StatelessWidget {
                   ),
                 ),
 
-                // Note quote
                 if (event.kind == ActivityKind.note && event.text != null) ...[
                   const SizedBox(height: 8),
                   Container(
@@ -211,7 +208,6 @@ class ActivityItem extends StatelessWidget {
                   ),
                 ],
 
-                // Veto pick posters
                 if (event.kind == ActivityKind.vetoPick &&
                     event.picks != null) ...[
                   const SizedBox(height: 10),
@@ -230,7 +226,6 @@ class ActivityItem extends StatelessWidget {
                   ),
                 ],
 
-                // Timestamp
                 const SizedBox(height: 6),
                 Text(
                   _timeAgo(event.at),
@@ -240,7 +235,6 @@ class ActivityItem extends StatelessWidget {
             ),
           ),
 
-          // Thumbnail (non-veto events with a movie)
           if (movie != null && event.kind != ActivityKind.vetoPick) ...[
             const SizedBox(width: 14),
             GestureDetector(
@@ -316,6 +310,21 @@ class ActivityItem extends StatelessWidget {
           const TextSpan(text: 'watched '),
           if (titleSpan != null) titleSpan,
           const TextSpan(text: ' together'),
+        ];
+      case ActivityKind.postedReview:
+        return [
+          const TextSpan(text: 'posted a review of '),
+          TextSpan(
+            text: event.text ?? movie?.title ?? 'a movie',
+            style: MT.display(size: 13, letterSpacing: 0, weight: FontWeight.w600),
+          ),
+          if (event.stars != null) ...[
+            const TextSpan(text: '  '),
+            TextSpan(
+              text: '${event.stars!.toStringAsFixed(1)} ★',
+              style: const TextStyle(color: MC.accent1),
+            ),
+          ],
         ];
     }
   }
