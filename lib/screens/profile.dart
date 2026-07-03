@@ -1,8 +1,9 @@
 // profile.dart — Displays the current user's profile, reviews, watchlists, watched history, friends, room code, and settings.
 import 'dart:io';
+import 'dart:ui' show PointerDeviceKind;
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import '../widgets/app_image.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
@@ -89,7 +90,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ? avatarColors[user.id.hashCode.abs() % avatarColors.length]
         : const Color(0xFFF6C453);
 
-    final bannerPosters = (List<Review>.from(reviews)
+    final autoBannerPosters = (List<Review>.from(reviews)
           ..sort((a, b) => b.stars.compareTo(a.stars)))
         .where((r) => r.moviePosterUrl != null && r.moviePosterUrl!.isNotEmpty)
         .take(4)
@@ -98,6 +99,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           return u.startsWith('/') ? '${Config.httpBase}$u' : u;
         })
         .toList();
+    final bannerPosters = state.customBannerUrls ?? autoBannerPosters;
 
     return Scaffold(
       backgroundColor: MC.bg0,
@@ -149,6 +151,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                         color: MC.mute, size: 15),
                               ),
                             ),
+
                             const SizedBox(width: 8),
                             GestureDetector(
                               onTap: () => _showEditProfile(context, user),
@@ -623,7 +626,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             color: avatarColor,
                           ),
                           child: resolvedFriendUrl != null
-                              ? CachedNetworkImage(
+                              ? AppImage(
                                   imageUrl: resolvedFriendUrl,
                                   width: 48,
                                   height: 48,
@@ -781,9 +784,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ClipRRect(
               borderRadius: BorderRadius.circular(6),
               child: posterUrl != null
-                  ? CachedNetworkImage(
+                  ? AppImage(
                       imageUrl: posterUrl,
-                      width: 40, height: 60, fit: BoxFit.cover,
+                      width: 40, height: 60,
+                      fit: BoxFit.cover,
                       errorWidget: (_, __, ___) => _reviewPosterPlaceholder())
                   : _reviewPosterPlaceholder(),
             ),
@@ -967,13 +971,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return;
     }
     if (user == null) return;
+    final state = context.read<AppState>();
+    // Deduplicate by movie ID so the same film never appears twice in the picker
+    final seenIds = <String>{};
+    final allPosters = <({String url, String title})>[];
+    for (final r in state.reviewsForUser(user.id)) {
+      final url = r.moviePosterUrl;
+      if (url != null && url.isNotEmpty && seenIds.add(r.movieId)) {
+        allPosters.add((url: url, title: r.movieTitle));
+      }
+    }
+    for (final m in state.myWatchedMovies) {
+      final url = m.posterUrl;
+      if (url != null && url.isNotEmpty && seenIds.add(m.id)) {
+        allPosters.add((url: url, title: m.title));
+      }
+    }
     showModalBottomSheet(
       context: context,
       backgroundColor: MC.bg1,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => _EditProfileSheet(user: user),
+      builder: (_) => _EditProfileSheet(
+        user: user,
+        allPosters: allPosters,
+        initialBannerUrls: state.customBannerUrls ?? [],
+      ),
     );
   }
 
@@ -1102,7 +1126,7 @@ class _ProfileAvatar extends StatelessWidget {
           shape: BoxShape.circle,
         ),
         child: ClipOval(
-          child: CachedNetworkImage(
+          child: AppImage(
               imageUrl: resolvedUrl,
               width: size, height: size, fit: BoxFit.cover),
         ),
@@ -1373,8 +1397,14 @@ class _JoinListCardState extends State<_JoinListCard> {
 
 class _EditProfileSheet extends StatefulWidget {
   final UserAccount user;
+  final List<({String url, String title})> allPosters;
+  final List<String> initialBannerUrls;
 
-  const _EditProfileSheet({required this.user});
+  const _EditProfileSheet({
+    required this.user,
+    required this.allPosters,
+    required this.initialBannerUrls,
+  });
 
   @override
   State<_EditProfileSheet> createState() => _EditProfileSheetState();
@@ -1382,180 +1412,319 @@ class _EditProfileSheet extends StatefulWidget {
 
 class _EditProfileSheetState extends State<_EditProfileSheet> {
   late final TextEditingController _nameCtrl;
+  late final TextEditingController _bannerSearchCtrl;
+  late List<String> _bannerSelected;
   XFile? _pickedImage;
   bool _saving = false;
+  String _bannerSearch = '';
 
   @override
   void initState() {
     super.initState();
     _nameCtrl = TextEditingController(text: widget.user.displayName);
+    _bannerSearchCtrl = TextEditingController();
+    _bannerSelected = List<String>.from(widget.initialBannerUrls);
   }
 
   @override
   void dispose() {
     _nameCtrl.dispose();
+    _bannerSearchCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 24, right: 24, top: 24,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 32,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Center(
-            child: Container(
-              width: 36, height: 4,
-              decoration: BoxDecoration(
-                  color: MC.dim,
-                  borderRadius: BorderRadius.circular(2)),
-            ),
-          ),
-          const SizedBox(height: 24),
+    final filtered = _bannerSearch.isEmpty
+        ? widget.allPosters
+        : widget.allPosters
+            .where((p) => p.title.toLowerCase().contains(_bannerSearch.toLowerCase()))
+            .toList();
 
-          GestureDetector(
-            onTap: _pickImage,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                _buildSheetAvatar(),
-                Positioned(
-                  right: -2, bottom: -2,
-                  child: Container(
-                    width: 28, height: 28,
-                    decoration: BoxDecoration(
-                      color: MC.accent1,
-                      shape: BoxShape.circle,
-                      border:
-                          Border.all(color: MC.bg1, width: 2),
+    return SingleChildScrollView(
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: 24, right: 24, top: 24,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 32,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Center(
+              child: Container(
+                width: 36, height: 4,
+                decoration: BoxDecoration(
+                    color: MC.dim,
+                    borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            GestureDetector(
+              onTap: _pickImage,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  _buildSheetAvatar(),
+                  Positioned(
+                    right: -2, bottom: -2,
+                    child: Container(
+                      width: 28, height: 28,
+                      decoration: BoxDecoration(
+                        color: MC.accent1,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: MC.bg1, width: 2),
+                      ),
+                      child: const Icon(Icons.camera_alt_rounded,
+                          color: MC.accentInk, size: 14),
                     ),
-                    child: const Icon(Icons.camera_alt_rounded,
-                        color: MC.accentInk, size: 14),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text('Tap to change photo',
+                    style: MT.mono(size: 10, letterSpacing: 1)),
+                const SizedBox(width: 8),
+                Text('· Max 50 KB',
+                    style: MT.mono(size: 10, letterSpacing: 0, color: MC.dim)),
+              ],
+            ),
+            const SizedBox(height: 28),
+
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('DISPLAY NAME',
+                  style: MT.mono(size: 10, letterSpacing: 2)),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _nameCtrl,
+              style: const TextStyle(color: MC.ink, fontSize: 16),
+              decoration: InputDecoration(
+                hintText: 'Your name…',
+                hintStyle: const TextStyle(color: MC.dim),
+                filled: true,
+                fillColor: MC.bg2,
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 14),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none),
+                focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: MC.accent1, width: 1)),
+              ),
+              cursorColor: MC.accent1,
+            ),
+            const SizedBox(height: 16),
+
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('USERNAME',
+                  style: MT.mono(size: 10, letterSpacing: 2)),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                color: MC.bg2,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Text('@${widget.user.username}',
+                      style: const TextStyle(color: MC.mute, fontSize: 15)),
+                  const Spacer(),
+                  Text('Cannot be changed',
+                      style: MT.mono(size: 9, letterSpacing: 1, color: MC.dim)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 28),
+
+            Row(
+              children: [
+                Text('BANNER POSTERS', style: MT.mono(size: 10, letterSpacing: 2)),
+                const Spacer(),
+                GestureDetector(
+                  onTap: _bannerSelected.isEmpty
+                      ? null
+                      : () => setState(() => _bannerSelected.clear()),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: _bannerSelected.isEmpty
+                          ? MC.accent1.withAlpha(30)
+                          : Colors.transparent,
+                      border: Border.all(
+                        color: _bannerSelected.isEmpty ? MC.accent1 : MC.dim,
+                        width: 0.5,
+                      ),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text('Auto',
+                        style: MT.mono(
+                          size: 9,
+                          letterSpacing: 0.5,
+                          color: _bannerSelected.isEmpty ? MC.accent1 : MC.dim,
+                        )),
                   ),
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text('Tap to change photo',
-                  style: MT.mono(size: 10, letterSpacing: 1)),
-              const SizedBox(width: 8),
-              Text('· Max 50 KB',
-                  style: MT.mono(size: 10, letterSpacing: 0, color: MC.dim)),
-            ],
-          ),
-          const SizedBox(height: 28),
-
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text('DISPLAY NAME',
-                style: MT.mono(size: 10, letterSpacing: 2)),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _nameCtrl,
-            style: const TextStyle(color: MC.ink, fontSize: 16),
-            decoration: InputDecoration(
-              hintText: 'Your name…',
-              hintStyle: const TextStyle(color: MC.dim),
-              filled: true,
-              fillColor: MC.bg2,
-              contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16, vertical: 14),
-              border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none),
-              focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide:
-                      const BorderSide(color: MC.accent1, width: 1)),
-            ),
-            cursorColor: MC.accent1,
-          ),
-          const SizedBox(height: 16),
-
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text('USERNAME',
-                style: MT.mono(size: 10, letterSpacing: 2)),
-          ),
-          const SizedBox(height: 8),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(
-                horizontal: 16, vertical: 14),
-            decoration: BoxDecoration(
-              color: MC.bg2,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              children: [
-                Text('@${widget.user.username}',
-                    style: const TextStyle(
-                        color: MC.mute, fontSize: 15)),
-                const Spacer(),
-                Text('Cannot be changed',
-                    style: MT.mono(
-                        size: 9, letterSpacing: 1, color: MC.dim)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 28),
-
-          GestureDetector(
-            onTap: _saving ? null : _save,
-            child: Container(
-              width: double.infinity,
-              height: 50,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                    colors: [MC.accent1, MC.accent2],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight),
-                borderRadius: BorderRadius.circular(14),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _bannerSearchCtrl,
+              style: const TextStyle(color: MC.ink, fontSize: 12),
+              onChanged: (v) => setState(() => _bannerSearch = v),
+              decoration: InputDecoration(
+                hintText: 'Search films…',
+                hintStyle: const TextStyle(color: MC.dim, fontSize: 12),
+                prefixIcon: const Icon(Icons.search_rounded, color: MC.dim, size: 16),
+                filled: true,
+                fillColor: MC.bg2,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide.none),
+                focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: MC.accent1, width: 1)),
               ),
-              alignment: Alignment.center,
-              child: _saving
-                  ? const SizedBox(
-                      width: 20, height: 20,
-                      child: CircularProgressIndicator(
-                          color: MC.accentInk, strokeWidth: 2))
-                  : const Text('Save Changes',
-                      style: TextStyle(
-                          color: MC.accentInk,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15)),
+              cursorColor: MC.accent1,
             ),
-          ),
-          const SizedBox(height: 12),
-
-          GestureDetector(
-            onTap: _signOut,
-            child: Container(
-              width: double.infinity,
-              height: 50,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                    color: Colors.redAccent.withAlpha(80),
-                    width: 0.5),
+            const SizedBox(height: 8),
+            if (widget.allPosters.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: Text('Review or watch some movies first.',
+                    style: TextStyle(color: MC.dim, fontSize: 12),
+                    textAlign: TextAlign.center),
+              )
+            else
+              SizedBox(
+                height: 105,
+                child: filtered.isEmpty
+                    ? const Center(
+                        child: Text('No matches',
+                            style: TextStyle(color: MC.dim, fontSize: 12)))
+                    : ScrollConfiguration(
+                        behavior: ScrollConfiguration.of(context).copyWith(
+                          dragDevices: {
+                            PointerDeviceKind.touch,
+                            PointerDeviceKind.mouse,
+                          },
+                        ),
+                        child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: filtered.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 6),
+                        itemBuilder: (_, i) {
+                          final p = filtered[i];
+                          final pos = _bannerSelected.indexOf(p.url);
+                          final isSelected = pos != -1;
+                          final isDisabled = !isSelected && _bannerSelected.length >= 4;
+                          return GestureDetector(
+                            onTap: isDisabled
+                                ? null
+                                : () => setState(() {
+                                      if (isSelected) {
+                                        _bannerSelected.remove(p.url);
+                                      } else {
+                                        _bannerSelected.add(p.url);
+                                      }
+                                    }),
+                            child: Stack(
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: AppImage(
+                                    imageUrl: p.url,
+                                    width: 63,
+                                    height: 94,
+                                    fit: BoxFit.cover,
+                                    fadeInDuration: Duration.zero,
+                                    fadeOutDuration: Duration.zero,
+                                    errorWidget: (_, __, ___) => Container(
+                                        width: 63, height: 94, color: MC.bg2),
+                                  ),
+                                ),
+                                if (isSelected)
+                                  Positioned(
+                                    top: 4, right: 4,
+                                    child: Container(
+                                      width: 18, height: 18,
+                                      decoration: const BoxDecoration(
+                                          color: MC.accent1,
+                                          shape: BoxShape.circle),
+                                      alignment: Alignment.center,
+                                      child: Text('${pos + 1}',
+                                          style: const TextStyle(
+                                              fontSize: 9,
+                                              color: MC.accentInk,
+                                              fontWeight: FontWeight.w700)),
+                                    ),
+                                  ),
+                                if (isDisabled)
+                                  Positioned.fill(
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(6),
+                                      child: const ColoredBox(
+                                          color: Color(0x66000000)),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
               ),
-              alignment: Alignment.center,
-              child: const Text('Sign Out',
-                  style: TextStyle(
-                      color: Colors.redAccent,
-                      fontWeight: FontWeight.w500,
-                      fontSize: 15)),
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                _bannerSelected.isEmpty
+                    ? 'Auto — using top rated'
+                    : '${_bannerSelected.length}/4 selected',
+                style: MT.mono(size: 9, letterSpacing: 0.5, color: MC.dim),
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 28),
+
+            GestureDetector(
+              onTap: _saving ? null : _save,
+              child: Container(
+                width: double.infinity,
+                height: 50,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                      colors: [MC.accent1, MC.accent2],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                alignment: Alignment.center,
+                child: _saving
+                    ? const SizedBox(
+                        width: 20, height: 20,
+                        child: CircularProgressIndicator(
+                            color: MC.accentInk, strokeWidth: 2))
+                    : const Text('Save Changes',
+                        style: TextStyle(
+                            color: MC.accentInk,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15)),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1588,7 +1757,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
           shape: BoxShape.circle,
         ),
         child: ClipOval(
-          child: CachedNetworkImage(
+          child: AppImage(
               imageUrl: resolvedUrl,
               width: size, height: size, fit: BoxFit.cover),
         ),
@@ -1648,23 +1817,16 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
         displayName: _nameCtrl.text,
         avatarFilePath: _pickedImage?.path,
       );
+      final initial = widget.initialBannerUrls;
+      final bannerChanged = _bannerSelected.length != initial.length ||
+          !_bannerSelected.asMap().entries.every((e) => e.value == initial[e.key]);
+      if (bannerChanged) {
+        await context.read<AppState>().setBannerUrls(_bannerSelected);
+      }
       if (mounted) Navigator.pop(context);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
-  }
-
-  void _signOut() {
-    Navigator.pop(context);
-    final nav = Navigator.of(context);
-    context.read<AppState>().logout().then((_) {
-      if (mounted) {
-        nav.pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const OnboardingScreen()),
-          (_) => false,
-        );
-      }
-    });
   }
 }
 
@@ -1704,7 +1866,7 @@ class _PendingRequestTile extends StatelessWidget {
           ? fromAvatarUrl!
           : '${Config.httpBase}$fromAvatarUrl';
       avatar = ClipOval(
-        child: CachedNetworkImage(
+        child: AppImage(
             imageUrl: resolvedUrl,
             width: 36, height: 36, fit: BoxFit.cover),
       );
@@ -1881,39 +2043,45 @@ class _WatchedGridState extends State<_WatchedGrid> {
                 style: TextStyle(color: MC.dim, fontSize: 13)),
           )
         else
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            padding: EdgeInsets.zero,
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: (MediaQuery.of(context).size.width / 180).floor().clamp(3, 8),
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
-              childAspectRatio: 2 / 3,
-            ),
-            itemCount: pageMovies.length,
-            itemBuilder: (ctx, i) {
-              final wm = pageMovies[i];
-              final url = wm.posterUrl != null && wm.posterUrl!.isNotEmpty
-                  ? (wm.posterUrl!.startsWith('/')
-                      ? '${Config.httpBase}${wm.posterUrl}'
-                      : wm.posterUrl!)
-                  : null;
-              return GestureDetector(
-                onTap: () => Navigator.push(
-                  ctx,
-                  MaterialPageRoute(
-                    builder: (_) => DetailScreen(movie: _watchedToStubMovie(wm)),
-                  ),
+          LayoutBuilder(
+            builder: (ctx, box) {
+              const gap = 8.0;
+              final cols = (box.maxWidth / 140).round().clamp(2, 8);
+              return GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                padding: EdgeInsets.zero,
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: cols,
+                  crossAxisSpacing: gap,
+                  mainAxisSpacing: gap,
+                  childAspectRatio: 2 / 3,
                 ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: url != null
-                      ? CachedNetworkImage(
-                          imageUrl: url, fit: BoxFit.cover,
-                          errorWidget: (_, __, ___) => _watchedPlaceholder(wm))
-                      : _watchedPlaceholder(wm),
-                ),
+                itemCount: pageMovies.length,
+                itemBuilder: (ctx, i) {
+                  final wm = pageMovies[i];
+                  final url = wm.posterUrl != null && wm.posterUrl!.isNotEmpty
+                      ? (wm.posterUrl!.startsWith('/')
+                          ? '${Config.httpBase}${wm.posterUrl}'
+                          : wm.posterUrl!)
+                      : null;
+                  return GestureDetector(
+                    onTap: () => Navigator.push(
+                      ctx,
+                      MaterialPageRoute(
+                        builder: (_) => DetailScreen(movie: _watchedToStubMovie(wm)),
+                      ),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: url != null
+                          ? AppImage(
+                              imageUrl: url, fit: BoxFit.cover,
+                              errorWidget: (_, __, ___) => _watchedPlaceholder(wm))
+                          : _watchedPlaceholder(wm),
+                    ),
+                  );
+                },
               );
             },
           ),

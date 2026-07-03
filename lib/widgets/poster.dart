@@ -1,6 +1,6 @@
 // poster.dart — Movie poster widget that shows a network image or a styled typographic gradient fallback.
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'app_image.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models.dart';
 
@@ -26,15 +26,13 @@ class PosterWidget extends StatelessWidget {
     if (imageUrl != null) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(6),
-        child: CachedNetworkImage(
+        child: AppImage(
           imageUrl: imageUrl,
           width: width,
           height: height,
           fit: BoxFit.cover,
-          fadeInDuration: Duration.zero,
+          fadeInDuration: const Duration(milliseconds: 250),
           fadeOutDuration: Duration.zero,
-          memCacheWidth: width.isFinite ? (width * 2).toInt() : null,
-          memCacheHeight: height.isFinite ? (height * 2).toInt() : null,
           placeholder: (_, __) => _buildGradientPoster(context),
           errorWidget: (_, __, ___) => _buildGradientPoster(context),
         ),

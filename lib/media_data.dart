@@ -70,6 +70,7 @@ class MediaData {
       addedBy: 'search',
       section: WatchSection.want,
       synopsis: j['plot'] as String? ?? '',
+      mediaType: j['mediaType'] as String? ?? 'movie',
       poster: _buildPoster(j),
     );
   }

@@ -84,31 +84,60 @@ module.exports = function (broadcastToUser) {
             );
             const u = userR.rows[0] ?? {};
 
-            const id = crypto.randomUUID();
-            await query(
-                `INSERT INTO reviews
-        (id, by_id, by_name, by_handle, by_avatar_url,
-         movie_id, movie_title, movie_year, movie_director, movie_poster_url,
-         stars, text, rewatch)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-                [
-                    id,
-                    byId,
-                    u.display_name || u.username || byId,
-                    u.username || byId,
-                    u.avatar_url || null,
-                    movieId,
-                    movieTitle,
-                    parseInt(movieYear) || 0,
-                    movieDirector,
-                    moviePosterUrl,
-                    parseFloat(stars),
-                    text.trim(),
-                    Boolean(rewatch),
-                ]
+            const byName     = u.display_name || u.username || byId;
+            const byHandle   = u.username || byId;
+            const byAvatarUrl = u.avatar_url || null;
+
+            // Check if this user already reviewed this movie and update instead of insert
+            const existing = await query(
+                'SELECT id FROM reviews WHERE by_id = $1 AND movie_id = $2',
+                [byId, movieId]
             );
 
-            const r = await query('SELECT * FROM reviews WHERE id = $1', [id]);
+            let r;
+            if (existing.rows.length > 0) {
+                r = await query(
+                    `UPDATE reviews SET
+                       stars = $1, text = $2, rewatch = $3,
+                       by_name = $4, by_handle = $5, by_avatar_url = $6,
+                       at = NOW()
+                     WHERE id = $7 RETURNING *`,
+                    [
+                        parseFloat(stars),
+                        text.trim(),
+                        Boolean(rewatch),
+                        byName,
+                        byHandle,
+                        byAvatarUrl,
+                        existing.rows[0].id,
+                    ]
+                );
+            } else {
+                const id = crypto.randomUUID();
+                r = await query(
+                    `INSERT INTO reviews
+             (id, by_id, by_name, by_handle, by_avatar_url,
+              movie_id, movie_title, movie_year, movie_director, movie_poster_url,
+              stars, text, rewatch)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+            RETURNING *`,
+                    [
+                        id,
+                        byId,
+                        byName,
+                        byHandle,
+                        byAvatarUrl,
+                        movieId,
+                        movieTitle,
+                        parseInt(movieYear) || 0,
+                        movieDirector,
+                        moviePosterUrl,
+                        parseFloat(stars),
+                        text.trim(),
+                        Boolean(rewatch),
+                    ]
+                );
+            }
 
             try {
                 const authorR = await query('SELECT friend_ids FROM users WHERE id = $1', [byId]);

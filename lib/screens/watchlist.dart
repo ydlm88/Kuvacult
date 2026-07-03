@@ -1,8 +1,8 @@
 // watchlist.dart — Displays the active watchlist's movies across Want/Watching/Watched sections with sort, genre filter, grid/list toggle, random pick, and inline invite sheet.
 import 'dart:math';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import '../widgets/app_image.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../theme.dart';
@@ -14,6 +14,7 @@ import '../widgets/stream_badge.dart';
 import '../widgets/watch_row.dart';
 import '../widgets/section_header.dart';
 import '../widgets/tag.dart';
+import '../widgets/kuvacult_loader.dart';
 import 'detail.dart';
 import 'watchlists.dart';
 
@@ -30,12 +31,21 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
   String _movieSearch = '';
   final _movieSearchCtrl = TextEditingController();
   int _page = 0;
-  bool _gridView = false;
   static const int _kPageSize = 15;
+
+  bool _loading = false;
+  bool _prevGridView = false;
+  WatchSection _prevSection = WatchSection.want;
 
   @override
   void initState() {
     super.initState();
+    // Show loader on first open so posters never flash in cold.
+    _loading = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (mounted) setState(() => _loading = false);
+    });
   }
 
   @override
@@ -82,6 +92,20 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
       );
     }
 
+    final gridView = state.getGridView(watchlist.id);
+
+    // Trigger loader on grid/list toggle or section switch.
+    // Set _loading synchronously so the loader renders on this very frame.
+    if (gridView != _prevGridView || _section != _prevSection) {
+      _loading = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await Future.delayed(const Duration(milliseconds: 500));
+        if (mounted) setState(() => _loading = false);
+      });
+    }
+    _prevGridView = gridView;
+    _prevSection = _section;
+
     final allMovies = state.moviesForSection(_section);
     final movies = _movieSearch.isEmpty
         ? allMovies
@@ -96,7 +120,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
         controller: _scrollCtrl,
         slivers: [
           SliverToBoxAdapter(child: _buildHeader(context, watchlist, state)),
-          SliverToBoxAdapter(child: _buildTabs(state)),
+          SliverToBoxAdapter(child: _buildTabs(state, watchlist)),
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
@@ -143,12 +167,26 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
               ),
             ),
           ),
-          if (_gridView)
-            ..._buildGridContent(context, movies)
-          else if (_section == WatchSection.want)
-            ..._buildWantContent(context, movies)
-          else
-            ..._buildListContent(context, movies),
+          SliverToBoxAdapter(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              child: _loading
+                  ? const SizedBox(
+                      key: ValueKey('l'),
+                      height: 420,
+                      child: Center(child: KuvacultLoader()),
+                    )
+                  : KeyedSubtree(
+                      key: ValueKey('c${_section.index}$gridView'),
+                      child: gridView
+                          ? _buildGridWidget(context, movies,
+                              showTopPickBadge: _section == WatchSection.want)
+                          : (_section == WatchSection.want
+                              ? _buildWantWidget(context, movies)
+                              : _buildListWidget(context, movies)),
+                    ),
+            ),
+          ),
           const SliverToBoxAdapter(child: SizedBox(height: 120)),
         ],
       ),
@@ -265,7 +303,81 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
     ];
   }
 
-  List<Widget> _buildGridContent(BuildContext context, List<Movie> movies) {
+  Widget _buildWantWidget(BuildContext context, List<Movie> movies) {
+    if (movies.isEmpty) {
+      return _movieSearch.isNotEmpty
+          ? const Padding(
+              padding: EdgeInsets.fromLTRB(20, 40, 20, 0),
+              child: Center(child: Text('No movies match your search',
+                  style: TextStyle(color: MC.dim, fontSize: 13))),
+            )
+          : _buildEmptyState();
+    }
+    if (_movieSearch.isNotEmpty) {
+      final pageCount = (movies.length / _kPageSize).ceil();
+      final page = _page.clamp(0, pageCount - 1);
+      final pageMovies = movies.skip(page * _kPageSize).take(_kPageSize).toList();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ...List.generate(pageMovies.length, (i) => Column(children: [
+            WatchRow(movie: pageMovies[i], onTap: () => _openDetail(context, pageMovies[i])),
+            if (i < pageMovies.length - 1) Divider(color: MC.line, height: 0.5, thickness: 0.5),
+          ])),
+          if (pageCount > 1) _buildPaginationWidget(page, pageCount),
+        ],
+      );
+    }
+    final featured = movies.first;
+    final rest = movies.length > 1 ? movies.sublist(1) : <Movie>[];
+    final pageCount = rest.isEmpty ? 0 : (rest.length / _kPageSize).ceil();
+    final page = pageCount == 0 ? 0 : _page.clamp(0, pageCount - 1);
+    final pageMovies = rest.skip(page * _kPageSize).take(_kPageSize).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildFeatured(context, featured),
+        if (rest.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(0, 24, 0, 4),
+            child: SectionHeader(title: 'The rest of the queue', count: rest.length),
+          ),
+          ...List.generate(pageMovies.length, (i) => Column(children: [
+            WatchRow(movie: pageMovies[i], onTap: () => _openDetail(context, pageMovies[i])),
+            if (i < pageMovies.length - 1) Divider(color: MC.line, height: 0.5, thickness: 0.5),
+          ])),
+          if (pageCount > 1) _buildPaginationWidget(page, pageCount),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildListWidget(BuildContext context, List<Movie> movies) {
+    if (movies.isEmpty) {
+      return _movieSearch.isNotEmpty
+          ? const Padding(
+              padding: EdgeInsets.fromLTRB(20, 40, 20, 0),
+              child: Center(child: Text('No movies match your search',
+                  style: TextStyle(color: MC.dim, fontSize: 13))),
+            )
+          : _buildEmptyState();
+    }
+    final pageCount = (movies.length / _kPageSize).ceil();
+    final page = _page.clamp(0, pageCount - 1);
+    final pageMovies = movies.skip(page * _kPageSize).take(_kPageSize).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ...List.generate(pageMovies.length, (i) => Column(children: [
+          WatchRow(movie: pageMovies[i], onTap: () => _openDetail(context, pageMovies[i])),
+          if (i < pageMovies.length - 1) Divider(color: MC.line, height: 0.5, thickness: 0.5),
+        ])),
+        if (pageCount > 1) _buildPaginationWidget(page, pageCount),
+      ],
+    );
+  }
+
+  List<Widget> _buildGridContent(BuildContext context, List<Movie> movies, {bool showTopPickBadge = false}) {
     if (movies.isEmpty) {
       return [_movieSearch.isNotEmpty
           ? _buildNoResultsSliver()
@@ -280,16 +392,17 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
         sliver: SliverGrid(
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: (MediaQuery.of(context).size.width / 180).floor().clamp(3, 8),
+            crossAxisCount: (MediaQuery.of(context).size.width / 160).floor().clamp(2, 8),
             crossAxisSpacing: 8,
             mainAxisSpacing: 12,
-            childAspectRatio: 0.62,
+            childAspectRatio: MediaQuery.of(context).size.width < 480 ? 0.65 : 0.62,
           ),
           delegate: SliverChildBuilderDelegate(
             (ctx, i) => RepaintBoundary(
               child: _PosterGridCell(
                 movie: pageMovies[i],
                 onTap: () => _openDetail(context, pageMovies[i]),
+                isTopPick: showTopPickBadge && i == 0 && page == 0,
               ),
             ),
             childCount: pageMovies.length,
@@ -300,6 +413,107 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
       ),
       if (pageCount > 1) _buildPaginationSliver(page, pageCount),
     ];
+  }
+
+  Widget _buildGridWidget(BuildContext context, List<Movie> movies, {bool showTopPickBadge = false}) {
+    if (movies.isEmpty) {
+      return _movieSearch.isNotEmpty
+          ? const Padding(
+              padding: EdgeInsets.fromLTRB(20, 40, 20, 0),
+              child: Center(
+                child: Text('No movies match your search',
+                    style: TextStyle(color: MC.dim, fontSize: 13)),
+              ),
+            )
+          : _buildEmptyState();
+    }
+    final pageCount = (movies.length / _kPageSize).ceil();
+    final page = _page.clamp(0, pageCount - 1);
+    final pageMovies = movies.skip(page * _kPageSize).take(_kPageSize).toList();
+
+    return LayoutBuilder(
+      builder: (ctx, box) {
+        const hPad = 16.0;
+        const gap = 8.0;
+        const textH = _PosterGridCell._textAreaHeight;
+        final gridW = box.maxWidth - hPad * 2;
+        final cols = (gridW / 140).round().clamp(2, 8);
+        final cellW = (gridW - gap * (cols - 1)) / cols;
+        final cellH = cellW * 1.5 + textH;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(hPad, 16, hPad, 0),
+          child: Column(
+            children: [
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: cols,
+                  crossAxisSpacing: gap,
+                  mainAxisSpacing: gap,
+                  childAspectRatio: cellW / cellH,
+                ),
+                itemCount: pageMovies.length,
+                itemBuilder: (ctx, i) => RepaintBoundary(
+                  child: _PosterGridCell(
+                    movie: pageMovies[i],
+                    onTap: () => _openDetail(context, pageMovies[i]),
+                    isTopPick: showTopPickBadge && i == 0 && page == 0,
+                  ),
+                ),
+              ),
+              if (pageCount > 1) _buildPaginationWidget(page, pageCount),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPaginationWidget(int page, int pageCount) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          GestureDetector(
+            onTap: page > 0 ? () => setState(() => _page = page - 1) : null,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: page > 0 ? MC.bg1 : MC.bg0,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: MC.line, width: 0.5),
+              ),
+              child: Text('← Prev',
+                  style: TextStyle(
+                      color: page > 0 ? MC.ink : MC.dim, fontSize: 12)),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Text('${page + 1} / $pageCount',
+              style: MT.mono(size: 11, letterSpacing: 0.5, color: MC.mute)),
+          const SizedBox(width: 12),
+          GestureDetector(
+            onTap: page < pageCount - 1
+                ? () => setState(() => _page = page + 1)
+                : null,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: page < pageCount - 1 ? MC.bg1 : MC.bg0,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: MC.line, width: 0.5),
+              ),
+              child: Text('Next →',
+                  style: TextStyle(
+                      color: page < pageCount - 1 ? MC.ink : MC.dim,
+                      fontSize: 12)),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildPaginationSliver(int page, int pageCount) {
@@ -515,7 +729,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
     );
   }
 
-  Widget _buildTabs(AppState state) {
+  Widget _buildTabs(AppState state, Watchlist watchlist) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -588,7 +802,10 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
               ),
               const SizedBox(width: 8),
               GestureDetector(
-                onTap: () => setState(() { _gridView = !_gridView; _page = 0; }),
+                onTap: () {
+                  context.read<AppState>().setGridView(watchlist.id, !state.getGridView(watchlist.id));
+                  setState(() { _page = 0; });
+                },
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
@@ -596,7 +813,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Icon(
-                    _gridView ? Icons.view_list_rounded : Icons.grid_view_rounded,
+                    state.getGridView(watchlist.id) ? Icons.view_list_rounded : Icons.grid_view_rounded,
                     color: MC.mute, size: 14,
                   ),
                 ),
@@ -612,7 +829,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
             child: Row(
               children: WatchSection.values.map((s) {
-                final count = context.read<AppState>().moviesForSection(s).length;
+                final count = watchlist.movies.where((m) => m.section == s).length;
                 final isActive = _section == s;
                 return GestureDetector(
                   onTap: () => _switchSection(s),
@@ -670,7 +887,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
             // Background poster image (when available)
             if (featured.poster.imageUrl != null)
               Positioned.fill(
-                child: CachedNetworkImage(
+                child: AppImage(
                   imageUrl: featured.poster.imageUrl!,
                   fit: BoxFit.cover,
                   width: double.infinity,
@@ -1119,11 +1336,15 @@ class _InviteSheetInlineState extends State<_InviteSheetInline> {
 class _PosterGridCell extends StatelessWidget {
   final Movie movie;
   final VoidCallback onTap;
+  final bool isTopPick;
 
-  const _PosterGridCell({required this.movie, required this.onTap});
+  const _PosterGridCell({
+    required this.movie,
+    required this.onTap,
+    this.isTopPick = false,
+  });
 
-  // Text area height (title + year lines below the poster)
-  static const double _textAreaHeight = 32.0;
+  static const double _textAreaHeight = 20.0;
 
   @override
   Widget build(BuildContext context) {
@@ -1137,29 +1358,49 @@ class _PosterGridCell extends StatelessWidget {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: PosterWidget(
-                  movie: movie,
-                  width: cellW,
-                  height: posterH,
-                ),
+              Stack(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: PosterWidget(
+                      movie: movie,
+                      width: cellW,
+                      height: posterH,
+                    ),
+                  ),
+                  if (isTopPick)
+                    Positioned(
+                      bottom: 5, left: 5,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: MC.accent1,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'NEXT',
+                          style: TextStyle(
+                            fontSize: 8,
+                            color: MC.accentInk,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 3),
               Text(
                 movie.title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                  fontSize: 11,
+                  fontSize: 10,
                   color: MC.ink,
                   fontWeight: FontWeight.w500,
                   height: 1.2,
                 ),
-              ),
-              Text(
-                '${movie.year}',
-                style: MT.mono(size: 9, letterSpacing: 0, color: MC.dim),
               ),
             ],
           );

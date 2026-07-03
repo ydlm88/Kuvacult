@@ -1,7 +1,7 @@
 // watchlists.dart — Lists all the user's watchlists with grid/list toggle, search, pagination, invite flow, and create/rename/delete/leave actions.
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import '../widgets/app_image.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../theme.dart';
@@ -722,7 +722,7 @@ class _WatchlistGridCard extends StatelessWidget {
 
   Widget _buildMosaic(List<Movie> posters) {
     Widget img(Movie m) => SizedBox.expand(
-      child: CachedNetworkImage(
+      child: AppImage(
         imageUrl: m.poster.imageUrl!,
         fit: BoxFit.cover,
         errorWidget: (_, __, ___) => Container(color: MC.bg2),

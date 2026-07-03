@@ -15,6 +15,12 @@ const upload = multer({
 
 const IMDB_BASE = 'https://api.imdbapi.dev';
 const OMDB_BASE = 'https://www.omdbapi.com';
+const OMDB_POSTER_BASE = 'https://img.omdbapi.com';
+
+function omdbPosterUrl(imdbId) {
+    if (!imdbId) return null;
+    return `${OMDB_POSTER_BASE}/?i=${imdbId}&apikey=${process.env.OMDB_API_KEY}`;
+}
 const MAX_MOVIES = 500;
 const CONCURRENCY = 6;
 
@@ -114,7 +120,7 @@ function parseCsvLine(line) {
     return result;
 }
 
-// Handles multi-line quoted fields — Letterboxd review CSVs embed newlines inside quotes.
+// Handles multi-line quoted fields, Letterboxd review CSVs embed newlines inside quotes.
 function parseCsv(text) {
     const raw = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const records = [];
@@ -125,7 +131,7 @@ function parseCsv(text) {
         const c = raw[i];
         if (c === '"') {
             if (inQuotes && raw[i + 1] === '"') {
-                current += '""'; // escaped quote — preserve so parseCsvLine handles it
+                current += '""'; // escaped quote, preserve so parseCsvLine handles it
                 i++;
             } else {
                 inQuotes = !inQuotes;
@@ -378,7 +384,7 @@ async function lookupMovie(name, year) {
 }
 
 function toEntry(movieId, title, year, posterUrl) {
-    return { movieId, title, year: year || 0, posterUrl: posterUrl || null };
+    return { movieId, title, year: year || 0, posterUrl: posterUrl || omdbPosterUrl(movieId) };
 }
 
 //Bounded concurrency

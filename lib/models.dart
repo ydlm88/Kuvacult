@@ -155,6 +155,7 @@ class Movie {
   final String addedBy;
   WatchSection section;
   final String synopsis;
+  final String mediaType;
   Map<String, ReactionType> reactions;
   Map<String, double> stars;
   List<MovieNote> notes;
@@ -173,6 +174,7 @@ class Movie {
     required this.addedBy,
     required this.section,
     required this.synopsis,
+    this.mediaType = 'movie',
     Map<String, ReactionType>? reactions,
     Map<String, double>? stars,
     List<MovieNote>? notes,

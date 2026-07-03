@@ -1,6 +1,6 @@
 // user_profile.dart — Displays a user's public profile with tabs for reviews, watched films, and watchlists, including follow/unfollow and a public watchlist detail screen.
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import '../widgets/app_image.dart';
 import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../config.dart';
@@ -134,16 +134,19 @@ class _UserProfileScreenState extends State<UserProfileScreen>
         : null;
     final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
 
-    // Top 4 movie poster URLs for the favorites banner 
-    final bannerPosters = (List<Review>.from(reviews)
-          ..sort((a, b) => b.stars.compareTo(a.stars)))
-        .where((r) => r.moviePosterUrl != null && r.moviePosterUrl!.isNotEmpty)
-        .take(4)
-        .map((r) {
-          final u = r.moviePosterUrl!;
-          return u.startsWith('/') ? '${Config.httpBase}$u' : u;
-        })
-        .toList();
+    // Top 4 movie poster URLs for the favorites banner
+    final serverBannerUrls = (_profile?['bannerUrls'] as List?)?.cast<String>() ?? [];
+    final bannerPosters = serverBannerUrls.isNotEmpty
+        ? serverBannerUrls
+        : (List<Review>.from(reviews)
+              ..sort((a, b) => b.stars.compareTo(a.stars)))
+            .where((r) => r.moviePosterUrl != null && r.moviePosterUrl!.isNotEmpty)
+            .take(4)
+            .map((r) {
+              final u = r.moviePosterUrl!;
+              return u.startsWith('/') ? '${Config.httpBase}$u' : u;
+            })
+            .toList();
 
     final topPad = MediaQuery.of(context).padding.top;
 
@@ -199,7 +202,7 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                           ),
                           clipBehavior: Clip.antiAlias,
                           child: avatarUrl != null
-                              ? CachedNetworkImage(
+                              ? AppImage(
                                   imageUrl: avatarUrl,
                                   fit: BoxFit.cover,
                                   errorWidget: (_, __, ___) => _avatarInitial(initial),
@@ -596,7 +599,7 @@ class _ProfileReviewCard extends StatelessWidget {
           ClipRRect(
             borderRadius: BorderRadius.circular(6),
             child: posterUrl != null
-                ? CachedNetworkImage(
+                ? AppImage(
                     imageUrl: posterUrl,
                     width: 40,
                     height: 60,
@@ -786,7 +789,7 @@ class _FilmsTabState extends State<_FilmsTab> {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: url != null
-                      ? CachedNetworkImage(
+                      ? AppImage(
                           imageUrl: url,
                           fit: BoxFit.cover,
                           errorWidget: (_, __, ___) => _posterPlaceholder(m))
@@ -1096,7 +1099,7 @@ class _WatchlistsTabState extends State<_WatchlistsTab> {
 
   Widget _buildProfileWatchlistMosaic(List<String> posterUrls) {
     Widget img(String url) => SizedBox.expand(
-      child: CachedNetworkImage(
+      child: AppImage(
         imageUrl: url,
         fit: BoxFit.cover,
         errorWidget: (_, __, ___) => Container(color: MC.bg2),
@@ -1366,6 +1369,7 @@ class _PublicWatchlistScreenState extends State<PublicWatchlistScreen> {
       addedBy: m['addedBy'] ?? '',
       section: WatchSection.want,
       synopsis: m['synopsis'] ?? '',
+      mediaType: m['mediaType'] as String? ?? 'movie',
       watchedBy: (m['watchedBy'] as List? ?? []).cast<String>(),
       poster: imageUrl != null && imageUrl.isNotEmpty
           ? PosterData(gradient: _fallback.gradient, accent: _fallback.accent, imageUrl: imageUrl)
@@ -1496,7 +1500,7 @@ class _PublicWatchlistScreenState extends State<PublicWatchlistScreen> {
                                   children: [
                                     ClipOval(
                                       child: resolved != null
-                                          ? CachedNetworkImage(
+                                          ? AppImage(
                                               imageUrl: resolved,
                                               width: 40, height: 40,
                                               fit: BoxFit.cover,
@@ -1604,7 +1608,7 @@ class _PublicWatchlistScreenState extends State<PublicWatchlistScreen> {
                               child: ClipRRect(
                                 borderRadius: BorderRadius.circular(8),
                                 child: url != null
-                                    ? CachedNetworkImage(
+                                    ? AppImage(
                                         imageUrl: url,
                                         fit: BoxFit.cover,
                                         width: double.infinity,

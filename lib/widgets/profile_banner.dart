@@ -1,6 +1,6 @@
 // profile_banner.dart — Full-bleed profile header that tiles watchlist poster images with a gradient scrim overlay.
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'app_image.dart';
 import '../theme.dart';
 
 class ProfileBannerWidget extends StatelessWidget {
@@ -36,7 +36,7 @@ class ProfileBannerWidget extends StatelessWidget {
           Row(
             children: posterUrls
                 .map((url) => Expanded(
-                      child: CachedNetworkImage(
+                      child: AppImage(
                         imageUrl: url,
                         fit: BoxFit.cover,
                         width: double.infinity,

@@ -152,6 +152,17 @@ CREATE INDEX IF NOT EXISTS idx_reviews_movie  ON reviews(movie_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_by_id  ON reviews(by_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_at     ON reviews(at DESC);
 
+-- One review per user per movie (enables upsert)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'reviews_by_id_movie_id_key'
+  ) THEN
+    ALTER TABLE reviews ADD CONSTRAINT reviews_by_id_movie_id_key UNIQUE (by_id, movie_id);
+  END IF;
+END $$;
+
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'review_comments') THEN
@@ -202,7 +213,7 @@ CREATE TABLE IF NOT EXISTS veto_sessions (
 -- PG catalog
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE TABLE IF NOT EXISTS media (
-  id          TEXT PRIMARY KEY,           
+  id          TEXT PRIMARY KEY,
   title       TEXT NOT NULL,
   year        INTEGER NOT NULL DEFAULT 0,
   runtime     INTEGER NOT NULL DEFAULT 0, -- minutes
@@ -211,15 +222,33 @@ CREATE TABLE IF NOT EXISTS media (
   director    TEXT    NOT NULL DEFAULT '',
   synopsis    TEXT    NOT NULL DEFAULT '',
   poster_url  TEXT,
+  media_type  TEXT    NOT NULL DEFAULT 'movie',
   has_details BOOLEAN NOT NULL DEFAULT FALSE,
   cached_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='media' AND column_name='media_type') THEN
+    ALTER TABLE media ADD COLUMN media_type TEXT NOT NULL DEFAULT 'movie';
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_media_title_trgm ON media USING gin(title gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_media_genres     ON media USING gin(genres);
 CREATE INDEX IF NOT EXISTS idx_media_stubs      ON media(has_details) WHERE has_details = FALSE;
 
--- Migrate 
+-- Banner URLs per user
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='users' AND column_name='banner_urls') THEN
+    ALTER TABLE users ADD COLUMN banner_urls JSONB NOT NULL DEFAULT '[]'::jsonb;
+  END IF;
+END $$;
+
+-- Migrate
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'movie_catalog') AND

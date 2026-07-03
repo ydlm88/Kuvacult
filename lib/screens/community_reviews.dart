@@ -1,6 +1,6 @@
 // community_reviews.dart — Community hub screen showing trending movies, popular reviews, top watchlists, and top reviewers, with explore drill-downs and an activity/notification drawer.
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/gestures.dart';
+import '../widgets/app_image.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme.dart';
@@ -66,10 +66,7 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
     final reviews = state.publicReviews;
     final loading = state.reviewsLoading;
 
-    // Popular reviews this month sorted by likes
-    final popularReviews = List<Review>.from(state.reviewsThisMonth)
-      ..sort((a, b) => b.likes.compareTo(a.likes));
-    final topMonthReviews = popularReviews.take(20).toList();
+    final topMonthReviews = state.popularReviewsThisMonth;
 
     // Top watchlists from community API (all watchlists, sorted by likes)
     final topTenWatchlists = state.communityTopWatchlists;
@@ -254,7 +251,7 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
                                       ClipRRect(
                                         borderRadius: BorderRadius.circular(10),
                                         child: m.poster.imageUrl != null
-                                            ? CachedNetworkImage(
+                                            ? AppImage(
                                                 imageUrl: m.poster.imageUrl!,
                                                 width: 110,
                                                 height: 155,
@@ -386,7 +383,7 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
                                         ClipRRect(
                                           borderRadius: BorderRadius.circular(5),
                                           child: posterUrl != null
-                                              ? CachedNetworkImage(
+                                              ? AppImage(
                                                   imageUrl: posterUrl,
                                                   width: 40,
                                                   height: 60,
@@ -1380,7 +1377,7 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(8),
                         child: m.poster.imageUrl != null
-                            ? CachedNetworkImage(
+                            ? AppImage(
                                 imageUrl: m.poster.imageUrl!,
                                 fit: BoxFit.cover,
                                 width: double.infinity,
@@ -1636,8 +1633,6 @@ class _ReviewCard extends StatefulWidget {
 }
 
 class _ReviewCardState extends State<_ReviewCard> {
-  bool _expanded = false;
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -1717,7 +1712,7 @@ class _ReviewCardState extends State<_ReviewCard> {
                       ClipRRect(
                         borderRadius: BorderRadius.circular(6),
                         child: widget.review.moviePosterUrl != null
-                            ? CachedNetworkImage(
+                            ? AppImage(
                                 imageUrl: widget.review.moviePosterUrl!,
                                 width: 44,
                                 height: 66,
@@ -1803,32 +1798,11 @@ class _ReviewCardState extends State<_ReviewCard> {
 
           if (widget.review.text.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  ReviewText(
-                    text: widget.review.text,
-                    style: const TextStyle(fontSize: 13, color: MC.ink, height: 1.5),
-                    maxLines: _expanded ? 15 : 4,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  if (widget.review.text.length > 150) ...[
-                    const SizedBox(height: 4),
-                    GestureDetector(
-                      onTap: () => setState(() => _expanded = !_expanded),
-                      child: Text(
-                        _expanded ? 'Show less' : 'Read more',
-                        style: TextStyle(
-                          color: _expanded ? MC.dim : MC.accent1,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 6),
-                ],
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+              child: ExpandableReviewText(
+                text: widget.review.text,
+                style: const TextStyle(fontSize: 13, color: MC.ink, height: 1.5),
+                collapsedLines: 4,
               ),
             ),
 
@@ -1984,12 +1958,13 @@ class _AvatarWidget extends StatelessWidget {
     String? resolvedUrl = avatarUrl;
 
     if (userId != null) {
-      final state = context.watch<AppState>();
-      if (userId == state.currentUser?.id) {
-        // Always use live data for the current user (avatar may have changed this session)
-        resolvedUrl = state.currentUser?.avatarUrl ?? avatarUrl;
+      // Use select() for current user so we only rebuild when their avatar changes.
+      // For others, use read() since friends/member avatars don't change mid-session.
+      final currentUserId = context.select<AppState, String?>((s) => s.currentUser?.id);
+      if (userId == currentUserId) {
+        resolvedUrl = context.select<AppState, String?>((s) => s.currentUser?.avatarUrl) ?? avatarUrl;
       } else if ((avatarUrl ?? '').isEmpty) {
-        // Only look up from state when the review didn't carry an avatar URL
+        final state = context.read<AppState>();
         final friend = state.friends.cast<UserAccount?>().firstWhere(
             (f) => f?.id == userId,
             orElse: () => null);
@@ -2008,7 +1983,7 @@ class _AvatarWidget extends StatelessWidget {
           ? '${Config.httpBase}$resolvedUrl'
           : resolvedUrl;
       return ClipOval(
-        child: CachedNetworkImage(
+        child: AppImage(
           imageUrl: url,
           width: size,
           height: size,
@@ -2248,10 +2223,9 @@ class _WatchlistFanCardState extends State<_WatchlistFanCard> {
               if (i > 0)
                 Container(width: 1, color: Colors.black.withOpacity(0.25)),
               Expanded(
-                child: CachedNetworkImage(
+                child: AppImage(
                   imageUrl: _posters[i],
                   fit: BoxFit.cover,
-                  memCacheWidth: 100,
                   fadeInDuration: const Duration(milliseconds: 200),
                   placeholder: (_, __) => Container(color: MC.bg2),
                   errorWidget: (_, __, ___) => Container(color: MC.bg2),
@@ -2387,10 +2361,9 @@ class _WatchlistGridPosterCardState extends State<_WatchlistGridPosterCard> {
 
   Widget _buildMosaic() {
     Widget img(String url) => SizedBox.expand(
-      child: CachedNetworkImage(
+      child: AppImage(
         imageUrl: url,
         fit: BoxFit.cover,
-        memCacheWidth: 200,
         fadeInDuration: const Duration(milliseconds: 200),
         placeholder: (_, __) => Container(color: MC.bg2),
         errorWidget: (_, __, ___) => Container(color: MC.bg2),
@@ -2613,7 +2586,7 @@ class _WatchlistMoviesScreenState extends State<_WatchlistMoviesScreen> {
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(8),
                               child: m.poster.imageUrl != null
-                                  ? CachedNetworkImage(
+                                  ? AppImage(
                                       imageUrl: m.poster.imageUrl!,
                                       fit: BoxFit.cover,
                                       width: double.infinity,
@@ -2729,6 +2702,12 @@ Future<void> showWriteReviewSheet(
     return;
   }
 
+  // If user already reviewed this movie, open in edit mode
+  final userId = state.currentUser?.id ?? '';
+  final existing = state.reviewsForUser(userId)
+      .where((r) => r.movieId == movieId)
+      .firstOrNull;
+
   await showModalBottomSheet(
     context: context,
     isScrollControlled: true,
@@ -2741,6 +2720,7 @@ Future<void> showWriteReviewSheet(
       movieYear: movieYear,
       movieDirector: movieDirector,
       moviePosterUrl: moviePosterUrl,
+      existingReview: existing,
     ),
   );
 }
@@ -2751,6 +2731,7 @@ class _WriteReviewSheet extends StatefulWidget {
   final int movieYear;
   final String movieDirector;
   final String? moviePosterUrl;
+  final Review? existingReview;
 
   const _WriteReviewSheet({
     required this.movieId,
@@ -2758,6 +2739,7 @@ class _WriteReviewSheet extends StatefulWidget {
     required this.movieYear,
     required this.movieDirector,
     this.moviePosterUrl,
+    this.existingReview,
   });
 
   @override
@@ -2765,10 +2747,21 @@ class _WriteReviewSheet extends StatefulWidget {
 }
 
 class _WriteReviewSheetState extends State<_WriteReviewSheet> {
-  double _stars = 0;
-  bool _rewatch = false;
+  late double _stars;
+  late bool _rewatch;
   bool _submitting = false;
-  final _ctrl = TextEditingController();
+  late final TextEditingController _ctrl;
+
+  bool get _isEdit => widget.existingReview != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.existingReview;
+    _stars = e?.stars ?? 0;
+    _rewatch = e?.rewatch ?? false;
+    _ctrl = TextEditingController(text: e?.text ?? '');
+  }
 
   @override
   void dispose() {
@@ -2801,7 +2794,7 @@ class _WriteReviewSheetState extends State<_WriteReviewSheet> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Write a review', style: MT.display(size: 20)),
+                    Text(_isEdit ? 'Edit review' : 'Write a review', style: MT.display(size: 20)),
                     const SizedBox(height: 2),
                     Text(
                       '${widget.movieTitle}  ·  ${widget.movieYear}',
@@ -2966,7 +2959,7 @@ class _WriteReviewSheetState extends State<_WriteReviewSheet> {
                       child: CircularProgressIndicator(
                           color: MC.kuvacultScoreInk, strokeWidth: 2))
                   : Text(
-                      'Post review',
+                      _isEdit ? 'Update review' : 'Post review',
                       style: TextStyle(
                         color: (_stars > 0 && _ctrl.text.trim().isNotEmpty)
                             ? MC.kuvacultScoreInk

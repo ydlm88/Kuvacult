@@ -6,6 +6,8 @@ import 'app_state.dart';
 import 'theme.dart';
 import 'screens/onboarding.dart';
 import 'screens/main_shell.dart';
+import 'screens/server_down_screen.dart';
+import 'services/api_service.dart';
 import 'widgets/kuvacult_loader.dart';
 
 void main() {
@@ -33,6 +35,12 @@ class KuvacultApp extends StatelessWidget {
         title: 'Kuvacult',
         debugShowCheckedModeBanner: false,
         theme: MT.theme,
+        // Sits above the Navigator — intercepts server-down state regardless of
+        // which route the user is on, including deeply nested pushed screens.
+        builder: (context, child) => Consumer<AppState>(
+          builder: (_, state, __) =>
+              state.isServerDown ? const ServerDownScreen() : child!,
+        ),
         home: const _AppRouter(),
       ),
     );
@@ -57,20 +65,27 @@ class _AppRouterState extends State<_AppRouter> {
   }
 
   Future<void> _restore() async {
+    final serverUp = await ApiService.isServerUp();
+    if (!serverUp) {
+      if (mounted) {
+        context.read<AppState>().markServerDown();
+        setState(() => _checking = false);
+      }
+      return;
+    }
     await context.read<AppState>().tryRestoreSession();
     if (mounted) setState(() => _checking = false);
   }
 
   @override
   Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
     if (_checking) {
       return const Scaffold(
         backgroundColor: MC.bg0,
         body: Center(child: KuvacultLoader()),
       );
     }
-    return context.read<AppState>().isLoggedIn
-        ? const MainShell()
-        : const OnboardingScreen();
+    return state.isLoggedIn ? const MainShell() : const OnboardingScreen();
   }
 }

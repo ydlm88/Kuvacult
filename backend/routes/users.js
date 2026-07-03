@@ -30,6 +30,7 @@ module.exports = function (rooms, broadcastToUser) {
             watchlistIds: row.watchlist_ids ?? [],
             followingIds: row.following_ids ?? [],
             followerCount: row.follower_count ?? 0,
+            bannerUrls: row.banner_urls ?? [],
         };
     }
 
@@ -84,17 +85,18 @@ module.exports = function (rooms, broadcastToUser) {
                 friendIds: data.friend_ids ?? [],
                 roomKey: isSelf ? data.room_key : undefined,
                 watchlistIds: isSelf ? data.watchlist_ids : undefined,
+                bannerUrls: data.banner_urls ?? [],
             });
         } catch (err) {
             res.status(500).json({ error: err.message });
         }
     });
 
-    // PATCH /users/:id — update displayName, avatarUrl, roomKey, or avatarBg
+    // PATCH /users/:id — update displayName, avatarUrl, roomKey, avatarBg, or bannerUrls
     router.patch('/:id', requireAuth, async (req, res) => {
         try {
             if (req.user.sub !== req.params.id) return res.status(403).json({ error: 'Forbidden' });
-            const { displayName, avatarUrl, roomKey, avatarBg } = req.body;
+            const { displayName, avatarUrl, roomKey, avatarBg, bannerUrls } = req.body;
             const sets = ['updated_at = NOW()'];
             const vals = [];
             let i = 1;
@@ -113,6 +115,10 @@ module.exports = function (rooms, broadcastToUser) {
             if (avatarBg !== undefined) {
                 sets.push(`avatar_bg = $${i++}`);
                 vals.push(avatarBg);
+            }
+            if (bannerUrls !== undefined) {
+                sets.push(`banner_urls = $${i++}`);
+                vals.push(JSON.stringify(Array.isArray(bannerUrls) ? bannerUrls : []));
             }
             vals.push(req.params.id);
             const r = await query(

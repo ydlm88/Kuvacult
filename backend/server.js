@@ -267,6 +267,16 @@ async function resolveRound(watchlistId, session) {
     }
 }
 
+// Per-watchlist lock to serialize veto_add_picks and prevent race conditions
+// when two players submit simultaneously.
+const _pickLocks = new Map();
+function withPickLock(watchlistId, fn) {
+    const prev = _pickLocks.get(watchlistId) ?? Promise.resolve();
+    const next = prev.then(fn).catch(() => {});
+    _pickLocks.set(watchlistId, next);
+    return next;
+}
+
 //WebSocket message handler
 async function handleMessage(watchlistId, msg) {
     // veto_create
@@ -344,8 +354,9 @@ async function handleMessage(watchlistId, msg) {
             lobbyPlayers: session.lobbyPlayers,
         });
 
-        // veto_add_picks
+        // veto_add_picks — serialized per-watchlist to prevent race conditions
     } else if (msg.type === 'veto_add_picks') {
+        await withPickLock(watchlistId, async () => {
         const session = await getSession(watchlistId);
         if (!session || session.status !== 'picking') return;
         if (!session.lobbyPlayers.some((p) => p.id === msg.playerId)) return;
@@ -408,6 +419,7 @@ async function handleMessage(watchlistId, msg) {
                 takenIds: pickedIds,
             });
         }
+        }); // end withPickLock
 
         // veto_action
     } else if (msg.type === 'veto_action') {
@@ -580,11 +592,10 @@ async function handleMessage(watchlistId, msg) {
         bjDecks.set(watchlistId, shuffle(createDeck()));
         await dealCards(watchlistId, freshPlayers, bj.expectedBetters || 2);
 
-        // veto_cancel
+        // veto_cancel — works from any phase so the host is never locked out
     } else if (msg.type === 'veto_cancel') {
         const session = await getSession(watchlistId);
         if (!session) return;
-        if (!['lobby', 'picking'].includes(session.status)) return;
         if (msg.hostId !== session.pickerId) return;
         await deleteSession(watchlistId);
         bjDecks.delete(watchlistId);

@@ -1,7 +1,9 @@
 // app_state.dart — Central ChangeNotifier that owns all runtime state for the app, including the user session, watchlists, movies, reviews, friends, notifications, and community data.
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'models.dart';
 import 'media_data.dart';
 import 'services/auth_service.dart';
@@ -11,13 +13,67 @@ import 'services/user_notification_service.dart';
 
 class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final _authService = AuthService();
+  final _storage = const FlutterSecureStorage();
   bool _isLoggedIn = false;
   bool _isGuest = false;
+  bool _isServerDown = false;
   UserAccount? _currentUser;
+
+  Map<String, bool> _gridPrefs = {};
+  List<String>? _customBannerUrls;
+
+  bool getGridView(String watchlistId) => _gridPrefs[watchlistId] ?? false;
+  List<String>? get customBannerUrls => _customBannerUrls;
+
+  Future<void> setGridView(String watchlistId, bool isGrid) async {
+    _gridPrefs[watchlistId] = isGrid;
+    notifyListeners();
+    await _storage.write(key: 'wl_grid_v1', value: jsonEncode(_gridPrefs));
+  }
+
+  Future<void> setBannerUrls(List<String> urls) async {
+    _customBannerUrls = urls.isEmpty ? null : urls;
+    notifyListeners();
+    if (urls.isEmpty) {
+      await _storage.delete(key: 'banner_urls_v1');
+    } else {
+      await _storage.write(key: 'banner_urls_v1', value: jsonEncode(urls));
+    }
+    if (_currentUser != null) {
+      ApiService.updateProfile(userId: _currentUser!.id, bannerUrls: urls).catchError((_) {});
+    }
+  }
+
+  Future<void> _loadGridPrefs() async {
+    final raw = await _storage.read(key: 'wl_grid_v1');
+    if (raw == null) return;
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      _gridPrefs = decoded.map((k, v) => MapEntry(k, v as bool));
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> _loadBannerUrls() async {
+    final raw = await _storage.read(key: 'banner_urls_v1');
+    if (raw == null) return;
+    try {
+      final decoded = jsonDecode(raw) as List<dynamic>;
+      _customBannerUrls = decoded.cast<String>();
+      notifyListeners();
+    } catch (_) {}
+  }
 
   bool get isLoggedIn => _isLoggedIn;
   bool get isGuest => _isGuest;
+  bool get isServerDown => _isServerDown;
   UserAccount? get currentUser => _currentUser;
+
+  void markServerDown() {
+    if (_isServerDown) return;
+    _isServerDown = true;
+    notifyListeners();
+  }
 
   final _wlService = WatchlistService();
   StreamSubscription? _wlSub;
@@ -152,7 +208,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       final data = await ApiService.fetchPublicReviews();
       final fresh = data.map(_reviewFromJson).toList();
       _publicReviewsLoadedAt = DateTime.now();
-      // Upsert
+      // Upsert fresh reviews into _reviews
       for (final r in fresh) {
         final idx = _reviews.indexWhere((e) => e.id == r.id);
         if (idx != -1) {
@@ -161,6 +217,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           _reviews.add(r);
         }
       }
+      // Remove reviews that no longer exist on the server (deletions by others)
+      final freshIds = fresh.map((r) => r.id).toSet();
+      _reviews.removeWhere((r) => !freshIds.contains(r.id));
+      // Ensure newest-first ordering (new reviews arrive via .add() at the end)
+      _reviews.sort((a, b) => b.at.compareTo(a.at));
+      // Invalidate computed caches that depend on _reviews
+      _cachedPopularThisMonth = null;
+      _cachedTopReviewers = null;
       _prefetchMissingAvatars(fresh);
     } catch (_) {
       // keep existing cached reviews
@@ -277,7 +341,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       rewatch: rewatch,
     );
     final review = _reviewFromJson(data);
-    _reviews.insert(0, review);
+    final existingIdx = _reviews.indexWhere(
+        (r) => r.movieId == movieId && r.byId == _currentUser!.id);
+    if (existingIdx != -1) {
+      _reviews[existingIdx] = review;
+    } else {
+      _reviews.insert(0, review);
+    }
     notifyListeners();
     return review;
   }
@@ -325,7 +395,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> markMovieWatched(Movie movie) async {
     if (_currentUser == null) return;
     // Update global watch history optimistically
-    if (!_myWatchedMovies.any((m) => m.id == movie.id)) {
+    if (!_watchedMovieIds.contains(movie.id)) {
+      _watchedMovieIds.add(movie.id);
       _myWatchedMovies.add(WatchedMovie(
         id: movie.id,
         posterUrl: movie.poster.imageUrl,
@@ -356,6 +427,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> unmarkMovieWatched(String movieId) async {
     if (_currentUser == null) return;
     _myWatchedMovies.removeWhere((m) => m.id == movieId);
+    _watchedMovieIds.remove(movieId);
     notifyListeners();
     ApiService.unmarkMovieWatched(_currentUser!.id, movieId);
     final live = findMovie(movieId);
@@ -404,6 +476,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         _myWatchedMovies
           ..clear()
           ..addAll(items);
+        _watchedMovieIds
+          ..clear()
+          ..addAll(items.map((m) => m.id));
       } else {
         _profileWatchedCache[userId] = items;
       }
@@ -540,9 +615,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   final List<WatchedMovie> _myWatchedMovies = [];
+  final Set<String> _watchedMovieIds = {};
   final Map<String, List<WatchedMovie>> _profileWatchedCache = {};
   List<WatchedMovie> get myWatchedMovies => List.unmodifiable(_myWatchedMovies);
-  bool isWatched(String movieId) => _myWatchedMovies.any((m) => m.id == movieId);
+  bool isWatched(String movieId) => _watchedMovieIds.contains(movieId);
 
   final List<Map<String, dynamic>> _communityTopWatchlists = [];
   final Set<String> _likedCommunityWatchlistIds = {};
@@ -609,8 +685,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   AppState() {
     WidgetsBinding.instance.addObserver(this);
-    // Pre-load trending titles for the onboarding and search screens
+    ApiService.onServerDown = markServerDown;
     loadTrending();
+    _loadGridPrefs();
+    _loadBannerUrls();
   }
 
   @override
@@ -1306,10 +1384,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _pendingInvites.clear();
     _notifications.clear();
     _myWatchedMovies.clear();
+    _watchedMovieIds.clear();
     _profileWatchedCache.clear();
     _publicReviewsLoadedAt = null;
     _userReviewsLoadedAt.clear();
     _userWatchedLoadedAt.clear();
+    _gridPrefs = {};
+    _customBannerUrls = null;
     notifyListeners();
   }
 
@@ -1362,6 +1443,16 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         roomKey: userData['roomKey'] as String?,
       );
       _currentUser!.friendIds = (userData['friendIds'] as List? ?? []).cast<String>();
+      // Sync banner URLs from server — authoritative for cross-device consistency
+      final serverBanner = (userData['bannerUrls'] as List?)?.cast<String>();
+      if (serverBanner != null) {
+        _customBannerUrls = serverBanner.isEmpty ? null : serverBanner;
+        if (serverBanner.isEmpty) {
+          await _storage.delete(key: 'banner_urls_v1');
+        } else {
+          await _storage.write(key: 'banner_urls_v1', value: jsonEncode(serverBanner));
+        }
+      }
     } catch (_) {
       _currentUser = UserAccount(
         id: stored.userId,
@@ -1717,6 +1808,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
             addedBy: m['addedBy'] ?? 'guest',
             section: _parseSection(m['section'] as String?),
             synopsis: m['synopsis'] ?? '',
+            mediaType: m['mediaType'] as String? ?? 'movie',
             watchedBy: (m['watchedBy'] as List? ?? []).cast<String>(),
             poster: imageUrl != null && imageUrl.isNotEmpty
                 ? PosterData(
@@ -2011,14 +2103,36 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     return _reviews.where((r) => r.at.isAfter(cutoff)).toList();
   }
 
+  // Pre-sorted popular reviews for the current month — avoids re-sorting in build().
+  List<Review>? _cachedPopularThisMonth;
+  int _cachedPopularReviewsLength = -1;
+
+  List<Review> get popularReviewsThisMonth {
+    if (_cachedPopularThisMonth == null || _cachedPopularReviewsLength != _reviews.length) {
+      final cutoff = DateTime.now().subtract(const Duration(days: 31));
+      final sorted = _reviews.where((r) => r.at.isAfter(cutoff)).toList()
+        ..sort((a, b) => b.likes.compareTo(a.likes));
+      _cachedPopularThisMonth = sorted.take(20).toList();
+      _cachedPopularReviewsLength = _reviews.length;
+    }
+    return _cachedPopularThisMonth!;
+  }
+
+  List<Map<String, dynamic>>? _cachedTopReviewers;
+  int _cachedTopReviewersLength = -1;
+
   List<Map<String, dynamic>> topReviewers({int limit = 20}) {
+    if (_cachedTopReviewers != null && _cachedTopReviewersLength == _reviews.length) {
+      return _cachedTopReviewers!;
+    }
     final byUser = <String, List<Review>>{};
     for (final r in _reviews) {
       byUser.putIfAbsent(r.byId, () => []).add(r);
     }
     final entries = byUser.entries.toList()
       ..sort((a, b) => b.value.length.compareTo(a.value.length));
-    return entries.take(limit).map((e) {
+    _cachedTopReviewersLength = _reviews.length;
+    _cachedTopReviewers = entries.take(limit).map((e) {
       final first = e.value.first;
       return <String, dynamic>{
         'userId': e.key,
@@ -2030,5 +2144,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         'totalLikes': e.value.fold<int>(0, (s, r) => s + r.likes),
       };
     }).toList();
+    return _cachedTopReviewers!;
   }
 }

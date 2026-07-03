@@ -1,6 +1,6 @@
 // notifications.dart — Unified notifications screen for friend requests, watchlist invites, veto invites, and activity.
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import '../widgets/app_image.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
@@ -441,7 +441,7 @@ class _NotifCard extends StatelessWidget {
       );
     } else if (avatarUrl != null) {
       leftWidget = ClipOval(
-        child: CachedNetworkImage(
+        child: AppImage(
           imageUrl: avatarUrl!,
           width: size,
           height: size,

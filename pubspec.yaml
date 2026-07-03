@@ -24,6 +24,8 @@ dependencies:
   file_picker: ^8.1.7
   # Disk-backed image cache — images persist between sessions, eliminates carousel reloads
   cached_network_image: ^3.4.1
+  # Opens URLs in the default browser — used for the update banner link
+  url_launcher: ^6.3.1
 
 dev_dependencies:
   flutter_test:
@@ -32,3 +34,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/images/sus_sun.png

@@ -64,14 +64,18 @@ class _ExpandableReviewTextState extends State<ExpandableReviewText> {
   bool _expanded = false;
 
   bool _wouldOverflow(double maxWidth, TextScaler scaler) {
+    // Use plain text (no italic spans) to avoid style-stacking height artifacts.
+    // Trim trailing whitespace — trailing newlines add phantom line metrics.
     final painter = TextPainter(
-      text: TextSpan(text: widget.text, style: widget.style),
-      maxLines: widget.collapsedLines,
+      text: TextSpan(
+        style: widget.style,
+        text: widget.text.trimRight(),
+      ),
       textDirection: TextDirection.ltr,
       textScaler: scaler,
     );
     painter.layout(maxWidth: maxWidth);
-    return painter.didExceedMaxLines;
+    return painter.computeLineMetrics().length > widget.collapsedLines;
   }
 
   @override

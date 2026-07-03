@@ -7,6 +7,12 @@ const router = express.Router();
 
 const IMDB_BASE = 'https://api.imdbapi.dev';
 const OMDB_BASE = 'https://www.omdbapi.com';
+const OMDB_POSTER_BASE = 'https://img.omdbapi.com';
+
+function omdbPosterUrl(imdbId) {
+    if (!imdbId) return null;
+    return `${OMDB_POSTER_BASE}/?i=${imdbId}&apikey=${process.env.OMDB_API_KEY}`;
+}
 
 //SQLite cache
 const db = new Database(path.join(__dirname, '..', 'movie_cache.db'));
@@ -51,7 +57,11 @@ async function omdbJson(params) {
     const r = await fetch(url.toString(), { signal: AbortSignal.timeout(10000) });
     if (!r.ok) throw new Error(`omdb_${r.status}`);
     const data = await r.json();
-    if (data.Response === 'False') throw new Error(data.Error || 'omdb_no_results');
+    if (data.Response === 'False') {
+        const msg = data.Error || 'omdb_no_results';
+        if (/limit|exceeded|over|quota/i.test(msg)) throw new Error(`omdb_rate_limited: ${msg}`);
+        throw new Error(msg);
+    }
     return data;
 }
 
@@ -73,6 +83,7 @@ function omdbToImdb(o) {
                 : [],
         plot: o.Plot && o.Plot !== 'N/A' ? o.Plot : '',
         primaryImage: o.Poster && o.Poster !== 'N/A' ? { url: o.Poster } : null,
+        mediaType: o.Type || 'movie',
     };
 }
 
@@ -89,6 +100,7 @@ function omdbSearchItemToImdb(o) {
         directors: [],
         plot: '',
         primaryImage: o.Poster && o.Poster !== 'N/A' ? { url: o.Poster } : null,
+        mediaType: o.Type || 'movie',
     };
 }
 
@@ -103,7 +115,10 @@ function pgRowToImdb(row) {
         genres: row.genres || [],
         directors: row.director ? [{ primaryName: row.director }] : [],
         plot: row.synopsis || '',
-        primaryImage: row.poster_url ? { url: row.poster_url } : null,
+        primaryImage: row.poster_url
+            ? { url: row.poster_url }
+            : row.id ? { url: omdbPosterUrl(row.id) } : null,
+        mediaType: row.media_type || 'movie',
     };
 }
 
@@ -134,11 +149,12 @@ async function pgSaveMovie(m, hasDetails = true) {
     const director = m.directors?.[0]?.primaryName ?? '';
     const synopsis = m.plot || '';
     const posterUrl = m.primaryImage?.url ?? null;
+    const mediaType = m.mediaType || 'movie';
 
     await pgQuery(
         `INSERT INTO media
-       (id, title, year, runtime, rating, genres, director, synopsis, poster_url, has_details)
-     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10)
+       (id, title, year, runtime, rating, genres, director, synopsis, poster_url, media_type, has_details)
+     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11)
      ON CONFLICT (id) DO UPDATE SET
        title       = EXCLUDED.title,
        year        = EXCLUDED.year,
@@ -148,9 +164,10 @@ async function pgSaveMovie(m, hasDetails = true) {
        director    = CASE WHEN EXCLUDED.director != ''          THEN EXCLUDED.director ELSE media.director END,
        synopsis    = CASE WHEN EXCLUDED.synopsis != ''          THEN EXCLUDED.synopsis ELSE media.synopsis END,
        poster_url  = COALESCE(EXCLUDED.poster_url, media.poster_url),
+       media_type  = EXCLUDED.media_type,
        has_details = EXCLUDED.has_details OR media.has_details,
        updated_at  = NOW()`,
-        [id, title, year, runtime, rating, genres, director, synopsis, posterUrl, hasDetails]
+        [id, title, year, runtime, rating, genres, director, synopsis, posterUrl, mediaType, hasDetails]
     );
 }
 
@@ -231,7 +248,9 @@ async function enrichResultsInline(titles) {
             runtimeSeconds: db.runtime > 0 ? db.runtime * 60 : t.runtimeSeconds || 0,
             rating: db.rating > 0 ? { aggregateRating: db.rating } : t.rating,
             genres: db.genres?.length ? db.genres : t.genres || [],
-            primaryImage: db.poster_url ? { url: db.poster_url } : t.primaryImage,
+            primaryImage: db.poster_url
+                ? { url: db.poster_url }
+                : t.primaryImage ?? (t.id ? { url: omdbPosterUrl(t.id) } : null),
         };
     });
 
@@ -261,7 +280,8 @@ async function enrichResultsInline(titles) {
                     runtimeSeconds: mergeField(t.runtimeSeconds, full.runtimeSeconds),
                     rating: mergeField(t.rating, full.rating),
                     genres: mergeField(t.genres, full.genres),
-                    primaryImage: mergeField(t.primaryImage, full.primaryImage),
+                    primaryImage: mergeField(t.primaryImage, full.primaryImage)
+                        ?? (t.id ? { url: omdbPosterUrl(t.id) } : null),
                 };
                 if (full.plot || full.directors?.length) batchSaved.push(full);
             });
@@ -489,29 +509,66 @@ router.get('/:movieId/watchers', async (req, res) => {
 // GET /movies/catalog
 router.get('/catalog', async (req, res) => {
     try {
-        const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-        const offset = Math.max(parseInt(req.query.offset) || 0, 0);
-        const q = (req.query.q || '').trim();
+        const limit  = Math.min(parseInt(req.query.limit)  || 20, 100);
+        const offset = Math.max(parseInt(req.query.offset) || 0,   0);
+        const q      = (req.query.q    || '').trim();
+        const year   = parseInt(req.query.year) || null;
 
-        const entriesR = q
-            ? await pgQuery(
-                  `SELECT id, title, year, runtime, rating, genres, director, synopsis, poster_url, has_details
-           FROM media WHERE title ILIKE $1 ORDER BY rating DESC, has_details DESC LIMIT $2 OFFSET $3`,
-                  [`%${q}%`, limit, offset]
-              )
-            : await pgQuery(
-                  `SELECT id, title, year, runtime, rating, genres, director, synopsis, poster_url, has_details
-           FROM media ORDER BY updated_at DESC NULLS LAST, cached_at DESC NULLS LAST LIMIT $1 OFFSET $2`,
-                  [limit, offset]
-              );
+        const sort = (req.query.sort || '').trim();
+        const cols = `m.id, m.title, m.year, m.runtime, m.rating, m.genres,
+                      m.director, m.synopsis, m.poster_url, m.media_type, m.has_details,
+                      COUNT(DISTINCT wm.watchlist_id) AS watchlist_count`;
+
+        let orderBy;
+        if (sort === 'year_asc')  orderBy = 'm.year ASC NULLS LAST, m.rating DESC';
+        else if (sort === 'year_desc') orderBy = 'm.year DESC NULLS LAST, m.rating DESC';
+        else if (sort === 'newest') orderBy = 'm.cached_at DESC';
+        else orderBy = 'watchlist_count DESC, m.rating DESC, m.updated_at DESC NULLS LAST';
+
+        // Build WHERE clauses dynamically
+        const where = [];
+        const params = [];
+
+        if (q) {
+            params.push(`%${q}%`);
+            const n = params.length;
+            where.push(`(m.title ILIKE $${n} OR m.director ILIKE $${n}
+                         OR CAST(m.year AS TEXT) = $${n + 1}
+                         OR EXISTS (
+                           SELECT 1 FROM jsonb_array_elements_text(m.genres) g
+                           WHERE g ILIKE $${n}
+                         ))`);
+            params.push(q); // $n+1 for exact year match
+        }
+
+        if (year) {
+            params.push(year);
+            where.push(`m.year = $${params.length}`);
+        }
+
+        const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+        const entriesR = await pgQuery(
+            `SELECT ${cols}
+             FROM media m
+             LEFT JOIN movies wm ON wm.id = m.id
+             ${whereClause}
+             GROUP BY m.id
+             ORDER BY ${orderBy}
+             LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+            [...params, limit, offset]
+        );
 
         const totalR = await pgQuery(
-            q ? `SELECT COUNT(*) FROM media WHERE title ILIKE $1` : `SELECT COUNT(*) FROM media`,
-            q ? [`%${q}%`] : []
+            `SELECT COUNT(*) FROM media m ${whereClause}`,
+            params
         );
 
         res.json({
-            entries: entriesR.rows.map(pgRowToImdb),
+            entries: entriesR.rows.map((row) => ({
+                ...pgRowToImdb(row),
+                watchlistCount: parseInt(row.watchlist_count) || 0,
+            })),
             total: parseInt(totalR.rows[0].count),
             limit,
             offset,
@@ -532,8 +589,13 @@ router.delete('/catalog/:id', async (req, res) => {
     }
 });
 
-// POST /movies/bulk-pull
-router.post('/bulk-pull', async (req, res) => {
+const OMDB_SCAN_BATCH = 100000;
+const OMDB_SCAN_CONCURRENCY = 15;
+
+// In-memory job state, survives as long as the server process is running.
+let _pullJob = null; // { status: 'running'|'done'|'error', stats: {}, error: null }
+
+async function runBulkPull() {
     const genres = [
         'Action',
         'Drama',
@@ -563,8 +625,8 @@ router.post('/bulk-pull', async (req, res) => {
         imdbAdded: 0,
         imdbErrors: [],
         omdbById: 0,
-        omdbByName: 0,
         omdbErrors: [],
+        scanRange: '',
         totalBefore: 0,
         totalAfter: 0,
     };
@@ -620,24 +682,63 @@ router.post('/bulk-pull', async (req, res) => {
             }
         }
 
-        const omdbGenres =
-            failedGenres.size > 0
-                ? [...failedGenres]
-                : stats.imdbTrending === 0 && stats.imdbGenre === 0
-                  ? genres.slice(0, 10)
-                  : [];
+        const imdbFailed = stats.imdbTrending === 0 && stats.imdbGenre === 0;
 
-        for (const genre of omdbGenres) {
-            try {
-                const raw = await omdbJson({ s: genre, type: 'movie' });
-                const stubs = (raw.Search || []).map(omdbSearchItemToImdb);
-                if (!stubs.length) continue;
-                cacheTitles(stubs);
-                await pgSaveMovies(stubs, false);
-                stats.omdbByName += stubs.length;
-            } catch (e) {
-                stats.omdbErrors.push(`omdb-search ${genre}: ${e.message}`);
+        // Sequential IMDb ID scan — runs always so the catalog grows over time,
+        // and is the primary path when IMDb is unavailable.
+        {
+            await pgQuery(`
+                CREATE TABLE IF NOT EXISTS settings (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            `);
+            await pgQuery(`
+                INSERT INTO settings (key, value) VALUES ('imdb_scan_pos', '0')
+                ON CONFLICT (key) DO NOTHING
+            `);
+
+            const posR = await pgQuery(`SELECT value FROM settings WHERE key = 'imdb_scan_pos'`);
+            const startPos = parseInt(posR.rows[0]?.value || '0') + 1;
+            const endPos   = startPos + OMDB_SCAN_BATCH - 1;
+
+            const existingR = await pgQuery('SELECT id FROM media');
+            const existingIds = new Set(existingR.rows.map((r) => r.id));
+
+            // Build the list of IDs to probe, skipping ones already in catalog
+            const toProbe = [];
+            for (let n = startPos; n <= endPos; n++) {
+                const imdbId = `tt${String(n).padStart(7, '0')}`;
+                if (!existingIds.has(imdbId)) toProbe.push(imdbId);
             }
+
+            for (let i = 0; i < toProbe.length; i += OMDB_SCAN_CONCURRENCY) {
+                await Promise.allSettled(
+                    toProbe.slice(i, i + OMDB_SCAN_CONCURRENCY).map(async (imdbId) => {
+                        try {
+                            const raw = await omdbJson({ i: imdbId, plot: 'full' });
+                            if (!raw.Type || raw.Type === 'episode' || raw.Type === 'game') return;
+                            const full = omdbToImdb(raw);
+                            cacheTitles([full]);
+                            await pgSaveMovie(full, true);
+                            stats.omdbById++;
+                        } catch (e) {
+                            const msg = e.message || '';
+                            if (msg.startsWith('omdb_rate_limited') || msg.startsWith('omdb_4')) {
+                                stats.omdbErrors.push(`${imdbId}: ${msg}`);
+                            }
+                        }
+                    })
+                );
+                await sleep(200);
+            }
+
+            await pgQuery(
+                `INSERT INTO settings (key, value) VALUES ('imdb_scan_pos', $1)
+                 ON CONFLICT (key) DO UPDATE SET value = $1`,
+                [String(endPos)]
+            );
+            stats.scanRange = `tt${String(startPos).padStart(7, '0')} – tt${String(endPos).padStart(7, '0')}`;
         }
 
         const needsEnrichR = await pgQuery(
@@ -670,10 +771,28 @@ router.post('/bulk-pull', async (req, res) => {
         stats.imdbErrors = stats.imdbErrors.slice(0, 20);
         stats.omdbErrors = stats.omdbErrors.slice(0, 20);
 
-        res.json(stats);
+        return stats;
     } catch (err) {
-        res.status(500).json({ error: err.message, stats });
+        throw err;
     }
+}
+
+// POST /movies/bulk-pull — starts a background job and returns immediately.
+router.post('/bulk-pull', (req, res) => {
+    if (_pullJob?.status === 'running') {
+        return res.json({ status: 'running', stats: _pullJob.stats });
+    }
+    _pullJob = { status: 'running', stats: null, error: null };
+    runBulkPull()
+        .then((stats) => { _pullJob = { status: 'done', stats, error: null }; })
+        .catch((err) => { _pullJob = { status: 'error', stats: null, error: err.message }; });
+    res.json({ status: 'started' });
+});
+
+// GET /movies/bulk-pull/status — poll for job progress.
+router.get('/bulk-pull/status', (req, res) => {
+    if (!_pullJob) return res.json({ status: 'idle' });
+    res.json(_pullJob);
 });
 
 // GET /movies/:id
@@ -728,14 +847,22 @@ router.post('/backfill', async (req, res) => {
 // GET /movies/catalog/stats
 router.get('/catalog/stats', async (req, res) => {
     try {
-        const r = await pgQuery(
-            `SELECT
-         COUNT(*)                          AS total,
-         COUNT(*) FILTER (WHERE has_details)      AS full_detail,
-         COUNT(*) FILTER (WHERE NOT has_details)  AS stubs
-       FROM media`
-        );
-        res.json(r.rows[0]);
+        const [catalogR, activeR] = await Promise.all([
+            pgQuery(
+                `SELECT
+                   COUNT(*)                                        AS total,
+                   COUNT(*) FILTER (WHERE has_details)            AS full_detail,
+                   COUNT(*) FILTER (WHERE NOT has_details)        AS stubs,
+                   COUNT(*) FILTER (WHERE media_type = 'movie')   AS movies,
+                   COUNT(*) FILTER (WHERE media_type = 'series')  AS series,
+                   COUNT(*) FILTER (WHERE media_type = 'short')   AS shorts
+                 FROM media`
+            ),
+            pgQuery(
+                `SELECT COUNT(DISTINCT id) AS in_watchlists FROM movies`
+            ),
+        ]);
+        res.json({ ...catalogR.rows[0], in_watchlists: parseInt(activeR.rows[0].in_watchlists) });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

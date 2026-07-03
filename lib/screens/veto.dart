@@ -39,6 +39,7 @@ class _VetoScreenState extends State<VetoScreen> {
   Map<String, int> _maxVetosByPlayer = {};
 
   BlackjackState? _blackjack;
+  bool _pickerSheetOpen = false;
 
   VetoService? _veto;
   StreamSubscription<VetoEvent>? _sub;
@@ -203,14 +204,13 @@ class _VetoScreenState extends State<VetoScreen> {
           setState(() {
             _myPicksSubmitted = false;
             _takenIds         = taken;
+            // Undo the optimistic submittedCount increment
+            if (_submittedCount > 0) _submittedCount--;
           });
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: const Text('Some of your picks were already taken — choose different films.'),
-            backgroundColor: MC.bg1,
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ));
+          // Close the picker sheet if it's still open so the user sees fresh taken IDs
+          if (_pickerSheetOpen && Navigator.canPop(context)) {
+            Navigator.pop(context);
+          }
         }
 
       case 'veto_phase_started':
@@ -228,13 +228,6 @@ class _VetoScreenState extends State<VetoScreen> {
 
       case 'veto_cancelled':
         _resetState();
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Text('The lobby was cancelled.'),
-          backgroundColor: MC.bg1,
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ));
 
       case 'veto_reset':
         _resetState();
@@ -559,7 +552,7 @@ class _VetoScreenState extends State<VetoScreen> {
             ? const _ActionBtn(label: 'Waiting for others to pick…', enabled: false)
             : GestureDetector(
                 onTap: selectedWl != null ? () => _showPickerSheet(context, state, selectedWl) : null,
-                child: _ActionBtn(label: 'Submit your $_pickCount ${_pickCount == 1 ? "pick" : "picks"}', enabled: selectedWl != null),
+                child: _ActionBtn(label: 'Choose wisely..', enabled: selectedWl != null),
               );
         if (_isHost) {
           return Column(
@@ -789,6 +782,7 @@ class _VetoScreenState extends State<VetoScreen> {
     final Set<String> selected = {};
     String search = '';
 
+    _pickerSheetOpen = true;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -963,7 +957,7 @@ class _VetoScreenState extends State<VetoScreen> {
           );
         },
       ),
-    );
+    ).whenComplete(() => _pickerSheetOpen = false);
   }
 }
 
@@ -2019,7 +2013,7 @@ class _TicketStub extends StatelessWidget {
                   )
                 else if (!isVetoed)
                   GestureDetector(
-                    onTap: canVeto ? onVeto : null,
+                    onTap: canVeto ? onVeto : () {},
                     child: Padding(
                       padding: const EdgeInsets.only(right: 14),
                       child: Container(
@@ -2050,7 +2044,7 @@ class _TicketStub extends StatelessWidget {
                           border: Border.all(color: const Color(0xFFB91C1C), width: 2.5),
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        child: const Text('VETOED',
+                        child: const Text('SACRIFICED',
                             style: TextStyle(
                                 color: Color(0xFFB91C1C),
                                 fontWeight: FontWeight.w900,

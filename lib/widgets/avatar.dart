@@ -1,6 +1,6 @@
 // avatar.dart — Circular avatar that resolves a member ID to a network photo or an initialled colour circle.
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'app_image.dart';
 import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../config.dart';
@@ -89,7 +89,7 @@ class AvatarWidget extends StatelessWidget {
         border: ring != null ? Border.all(color: ring!, width: 1.5) : null,
       ),
       child: ClipOval(
-        child: CachedNetworkImage(
+        child: AppImage(
           imageUrl: url,
           width: s,
           height: s,

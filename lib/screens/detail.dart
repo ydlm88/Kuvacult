@@ -1,7 +1,7 @@
 // detail.dart — Full movie detail screen with enriched metadata, mark-watched/watchlist/rating/reaction actions, a watcher list, and a paginated community reviews section with comments.
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import '../widgets/app_image.dart';
 import 'package:provider/provider.dart';
 import '../theme.dart';
 import '../models.dart';
@@ -488,7 +488,7 @@ class _DetailScreenState extends State<DetailScreen> {
               ),
               clipBehavior: Clip.antiAlias,
               child: avatarUrl != null
-                  ? CachedNetworkImage(
+                  ? AppImage(
                       imageUrl: avatarUrl, fit: BoxFit.cover,
                       errorWidget: (_, __, ___) => Center(
                         child: Text(initial,
@@ -1431,7 +1431,7 @@ class _ReviewsSectionState extends State<_ReviewsSection> {
     if (rawUrl != null && rawUrl.isNotEmpty) {
       final url = rawUrl.startsWith('/') ? '${Config.httpBase}$rawUrl' : rawUrl;
       return ClipOval(
-        child: CachedNetworkImage(
+        child: AppImage(
             imageUrl: url,
             width: 26,
             height: 26,
@@ -1450,7 +1450,7 @@ class _ReviewsSectionState extends State<_ReviewsSection> {
           ? '${Config.httpBase}${c.byAvatarUrl}'
           : c.byAvatarUrl!;
       return ClipOval(
-        child: CachedNetworkImage(
+        child: AppImage(
             imageUrl: url,
             width: 22,
             height: 22,
