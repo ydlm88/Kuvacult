@@ -62,15 +62,18 @@ class AppImage extends StatelessWidget {
     }
 
     // Dynamic size: use LayoutBuilder to discover constraints.
+    // Only set memCacheWidth — setting both dimensions forces the image to decode
+    // at the exact container size, destroying aspect ratio when width >> height
+    // (e.g. banner images inside Expanded rows on wide desktop windows).
+    // BoxFit handles the display crop; only width drives decode quality.
     return LayoutBuilder(
       builder: (context, constraints) {
         final mcw = constraints.maxWidth.isFinite
             ? (constraints.maxWidth * dpr).ceil()
-            : null;
-        final mch = constraints.maxHeight.isFinite
-            ? (constraints.maxHeight * dpr).ceil()
-            : null;
-        return _image(context, mcw, mch);
+            : (constraints.maxHeight.isFinite
+                ? (constraints.maxHeight * dpr).ceil()
+                : null);
+        return _image(context, mcw, null);
       },
     );
   }
