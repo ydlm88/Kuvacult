@@ -1824,6 +1824,19 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
         await context.read<AppState>().setBannerUrls(_bannerSelected);
       }
       if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        final msg = e is ApiException ? e.message : 'Failed to save — please try again';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(msg, style: const TextStyle(color: MC.ink, fontSize: 13)),
+            backgroundColor: MC.bg1,
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }

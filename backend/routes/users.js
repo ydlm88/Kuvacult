@@ -248,7 +248,11 @@ module.exports = function (rooms, broadcastToUser) {
             const filename = `${req.params.id}.${ext}`;
             fs.writeFileSync(path.join(dir, filename), buffer);
 
-            const avatarUrl = `/uploads/avatars/${filename}`;
+            // Append a version timestamp so every upload produces a unique URL.
+            // express.static ignores query params when resolving the file path,
+            // so the same file is served — but clients see a new URL and bypass
+            // their image cache, fixing stale-avatar bugs across app restarts.
+            const avatarUrl = `/uploads/avatars/${filename}?v=${Date.now()}`;
             await query('UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2', [
                 avatarUrl,
                 req.params.id,

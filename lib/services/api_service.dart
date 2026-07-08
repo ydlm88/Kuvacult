@@ -1,4 +1,5 @@
 // api_service.dart — Thin HTTP client wrapping the Kuvacult REST API; all methods are static and throw ApiException on non-2xx responses.
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -43,6 +44,9 @@ class ApiService {
     } on http.ClientException {
       onServerDown?.call();
       rethrow;
+    } on TimeoutException {
+      onServerDown?.call();
+      rethrow;
     }
   }
 
@@ -57,6 +61,9 @@ class ApiService {
       onServerDown?.call();
       rethrow;
     } on http.ClientException {
+      onServerDown?.call();
+      rethrow;
+    } on TimeoutException {
       onServerDown?.call();
       rethrow;
     }
@@ -75,6 +82,9 @@ class ApiService {
     } on http.ClientException {
       onServerDown?.call();
       rethrow;
+    } on TimeoutException {
+      onServerDown?.call();
+      rethrow;
     }
   }
 
@@ -89,6 +99,9 @@ class ApiService {
       onServerDown?.call();
       rethrow;
     } on http.ClientException {
+      onServerDown?.call();
+      rethrow;
+    } on TimeoutException {
       onServerDown?.call();
       rethrow;
     }

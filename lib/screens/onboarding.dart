@@ -1,4 +1,5 @@
 // onboarding.dart — Splash/landing screen shown to new users, featuring a poster grid backdrop and CTA to sign up.
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme.dart';
@@ -7,8 +8,24 @@ import '../models.dart';
 import '../widgets/poster.dart';
 import 'auth.dart';
 
-class OnboardingScreen extends StatelessWidget {
+class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
+
+  @override
+  State<OnboardingScreen> createState() => _OnboardingScreenState();
+}
+
+class _OnboardingScreenState extends State<OnboardingScreen> {
+  bool _precached = false;
+
+  void _precachePosterImages(List<Movie> movies) {
+    if (_precached || !mounted) return;
+    _precached = true;
+    for (final m in movies) {
+      final url = m.poster.imageUrl;
+      if (url != null) precacheImage(CachedNetworkImageProvider(url), context);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -20,39 +37,60 @@ class OnboardingScreen extends StatelessWidget {
             top: 60,
             left: -40,
             right: -40,
-            height: 460,
+            height: MediaQuery.of(context).size.height * 0.80,
             child: Transform.rotate(
               angle: -0.105, //~6 degrees
               child: Opacity(
                 opacity: 0.85,
-                child: Consumer<AppState>(
-                  builder: (context, state, _) {
-                    //Take up to 6 trending titles; fill remaining slots with placeholders
-                    final movies = state.trendingMovies.take(6).toList();
-                    final placeholderCount = 6 - movies.length;
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    const padding = 16.0;
+                    const gap = 8.0;
+                    final gridW = constraints.maxWidth - padding * 2;
+                    // Target ~70 logical-pixel cells so posters read as "distant".
+                    // Clamps to 5–12 columns to cover phones through wide desktops.
+                    final cols = (gridW / 70).round().clamp(5, 12);
+                    final cellW = (gridW - gap * (cols - 1)) / cols;
+                    final cellH = cellW * 165 / 110;
+                    final stagger = cellH * 0.25;
+                    final rowH = cellH + gap;
+                    final rows = ((constraints.maxHeight - padding * 2) / rowH).ceil() + 1;
+                    final needed = rows * cols;
 
-                    return GridView.count(
-                      crossAxisCount: 3,
-                      padding: const EdgeInsets.all(20),
-                      mainAxisSpacing: 10,
-                      crossAxisSpacing: 10,
-                      childAspectRatio: 110 / 165,
-                      physics: const NeverScrollableScrollPhysics(),
-                      children: [
-                        ...movies.asMap().entries.map((e) =>
-                          Transform.translate(
-                            offset: Offset(0, (e.key % 2) * 30.0),
-                            child: PosterWidget(
-                                movie: e.value, width: 110, height: 165),
-                          ),
-                        ),
-                        ...List.generate(placeholderCount, (i) =>
-                          Transform.translate(
-                            offset: Offset(0, ((movies.length + i) % 2) * 30.0),
-                            child: _PlaceholderPoster(index: i),
-                          ),
-                        ),
-                      ],
+                    return Consumer<AppState>(
+                      builder: (context, state, _) {
+                        final movies = state.trendingMovies.take(needed).toList();
+                        if (movies.isNotEmpty) {
+                          WidgetsBinding.instance.addPostFrameCallback(
+                            (_) => _precachePosterImages(movies),
+                          );
+                        }
+                        final placeholderCount = needed - movies.length;
+
+                        return GridView.count(
+                          crossAxisCount: cols,
+                          padding: const EdgeInsets.all(padding),
+                          mainAxisSpacing: gap,
+                          crossAxisSpacing: gap,
+                          childAspectRatio: cellW / cellH,
+                          physics: const NeverScrollableScrollPhysics(),
+                          children: [
+                            ...movies.asMap().entries.map((e) =>
+                              Transform.translate(
+                                offset: Offset(0, (e.key % 2) * stagger),
+                                child: PosterWidget(
+                                    movie: e.value, width: cellW, height: cellH),
+                              ),
+                            ),
+                            ...List.generate(placeholderCount, (i) =>
+                              Transform.translate(
+                                offset: Offset(0, ((movies.length + i) % 2) * stagger),
+                                child: _PlaceholderPoster(index: i),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     );
                   },
                 ),
@@ -103,22 +141,13 @@ class OnboardingScreen extends StatelessWidget {
                     text: TextSpan(
                       style: MT.display(size: 40, letterSpacing: -1.2),
                       children: [
-                        const TextSpan(text: 'A watchlist\nfor '),
+                        const TextSpan(text: 'Culture is\nbetter '),
                         TextSpan(
-                          text: 'two',
+                          text: 'shared',
                           style: MT.display(
                             size: 40,
                             italic: true,
                             color: MC.accent1,
-                            letterSpacing: -1.2,
-                          ),
-                        ),
-                        const TextSpan(text: ',\nor a '),
-                        TextSpan(
-                          text: 'few',
-                          style: MT.display(
-                            size: 40,
-                            italic: true,
                             letterSpacing: -1.2,
                           ),
                         ),
@@ -129,7 +158,7 @@ class OnboardingScreen extends StatelessWidget {
                   const SizedBox(height: 14),
 
                   const Text(
-                    'Build a shared queue, pick what to watch tonight, and argue about it after.',
+                    'Build a shared queue with your people. Discover, debate, and watch together.',
                     style: TextStyle(
                       fontSize: 14,
                       color: MC.mute,
@@ -259,47 +288,12 @@ class _PlaceholderPoster extends StatelessWidget {
 class _KuvacultLogo extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      size: const Size(24, 20),
-      painter: _LogoPainter(),
+    return Image.asset(
+      'assets/images/kuvacult_logo.png',
+      width: 28,
+      height: 28,
     );
   }
-}
-
-class _LogoPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = MC.accent1
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4
-      ..strokeJoin = StrokeJoin.round;
-
-    final path = Path()
-      ..moveTo(size.width * 0.083, size.width * 0.417)
-      ..lineTo(size.width * 0.5, size.width * 0.083)
-      ..lineTo(size.width * 0.917, size.width * 0.417)
-      ..lineTo(size.width * 0.917, size.height * 0.789)
-      ..lineTo(size.width * 0.083, size.height * 0.789)
-      ..close();
-    canvas.drawPath(path, paint);
-
-    final bulbPaint = Paint()
-      ..color = MC.accent1
-      ..style = PaintingStyle.fill;
-    for (final x in [0.25, 0.417, 0.583, 0.75]) {
-      canvas.drawCircle(Offset(size.width * x, size.height * 0.42), 0.9, bulbPaint);
-    }
-
-    canvas.drawLine(
-      Offset(size.width * 0.208, size.height * 0.632),
-      Offset(size.width * 0.792, size.height * 0.632),
-      paint..strokeWidth = 0.8,
-    );
-  }
-
-  @override
-  bool shouldRepaint(_) => false;
 }
 
 class _PrimaryButton extends StatelessWidget {

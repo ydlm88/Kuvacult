@@ -53,6 +53,16 @@ class MediaData {
     return titles.take(20).map(_titleToMovie).toList();
   }
 
+  Future<List<Movie>> fetchActiveMovies({int limit = 60}) async {
+    final res = await http
+        .get(Uri.parse('$_base/movies/catalog?limit=$limit'))
+        .timeout(_timeout);
+    if (res.statusCode != 200) throw Exception('Catalog failed: ${res.statusCode}');
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    final entries = (data['entries'] as List<dynamic>?) ?? [];
+    return entries.map(_titleToMovie).toList();
+  }
+
   Movie _titleToMovie(dynamic json) {
     final j = json as Map<String, dynamic>;
     final rating = j['rating'] as Map<String, dynamic>?;

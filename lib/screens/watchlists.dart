@@ -204,6 +204,7 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
                         wl.memberIds.isNotEmpty &&
                         wl.memberIds[0] == currentUserId;
                     return _WatchlistGridCard(
+                      key: ValueKey(wl.id),
                       watchlist: wl,
                       isOwner: isOwner,
                       onTap: () => _open(context, wl),
@@ -212,6 +213,11 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
                       onDelete: () => _confirmDelete(context, wl),
                       onLeave: () => _confirmLeave(context, wl),
                     );
+                  },
+                  findChildIndexCallback: (key) {
+                    final id = (key as ValueKey<String>).value;
+                    final idx = pageItems.indexWhere((wl) => wl.id == id);
+                    return idx == -1 ? null : idx;
                   },
                   childCount: pageItems.length,
                 ),
@@ -228,6 +234,7 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
                         wl.memberIds.isNotEmpty &&
                         wl.memberIds[0] == currentUserId;
                     return _WatchlistCard(
+                      key: ValueKey(wl.id),
                       watchlist: wl,
                       isOwner: isOwner,
                       onTap: () => _open(context, wl),
@@ -236,6 +243,11 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
                       onDelete: () => _confirmDelete(context, wl),
                       onLeave: () => _confirmLeave(context, wl),
                     );
+                  },
+                  findChildIndexCallback: (key) {
+                    final id = (key as ValueKey<String>).value;
+                    final idx = pageItems.indexWhere((wl) => wl.id == id);
+                    return idx == -1 ? null : idx;
                   },
                   childCount: pageItems.length,
                 ),
@@ -605,6 +617,7 @@ class _WatchlistGridCard extends StatelessWidget {
   final VoidCallback onLeave;
 
   const _WatchlistGridCard({
+    super.key,
     required this.watchlist,
     required this.isOwner,
     required this.onTap,
@@ -804,6 +817,7 @@ class _WatchlistCard extends StatelessWidget {
   final VoidCallback onLeave;
 
   const _WatchlistCard({
+    super.key,
     required this.watchlist,
     required this.isOwner,
     required this.onTap,

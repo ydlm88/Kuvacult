@@ -1,8 +1,38 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../app_state.dart';
+import '../services/api_service.dart';
 import '../theme.dart';
 
-class ServerDownScreen extends StatelessWidget {
+class ServerDownScreen extends StatefulWidget {
   const ServerDownScreen({super.key});
+
+  @override
+  State<ServerDownScreen> createState() => _ServerDownScreenState();
+}
+
+class _ServerDownScreenState extends State<ServerDownScreen> {
+  bool _retrying = false;
+  bool _failed = false;
+
+  Future<void> _retry() async {
+    setState(() {
+      _retrying = true;
+      _failed = false;
+    });
+    final up = await ApiService.isServerUp();
+    if (!mounted) return;
+    if (up) {
+      final appState = context.read<AppState>();
+      appState.clearServerDown();
+      await appState.tryRestoreSession();
+    } else {
+      setState(() {
+        _retrying = false;
+        _failed = true;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -35,6 +65,37 @@ class ServerDownScreen extends StatelessWidget {
                 ),
                 textAlign: TextAlign.center,
               ),
+              const SizedBox(height: 32),
+              if (_retrying)
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: MC.accent1,
+                  ),
+                )
+              else
+                TextButton(
+                  onPressed: _retry,
+                  style: TextButton.styleFrom(
+                    foregroundColor: MC.accent1,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      side: const BorderSide(color: MC.accent1, width: 1),
+                    ),
+                  ),
+                  child: const Text('Try Again'),
+                ),
+              if (_failed) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  'Still down. Try again in a moment.',
+                  style: TextStyle(color: MC.mute, fontSize: 13),
+                  textAlign: TextAlign.center,
+                ),
+              ],
             ],
           ),
         ),

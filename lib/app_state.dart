@@ -75,6 +75,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  void clearServerDown() {
+    _isServerDown = false;
+    notifyListeners();
+  }
+
   final _wlService = WatchlistService();
   StreamSubscription? _wlSub;
 
@@ -686,6 +691,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   AppState() {
     WidgetsBinding.instance.addObserver(this);
     ApiService.onServerDown = markServerDown;
+    _wlService.onServerDown = markServerDown;
+    _notifService.onServerDown = markServerDown;
     loadTrending();
     _loadGridPrefs();
     _loadBannerUrls();
@@ -953,10 +960,19 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     if (!hasData) _trendingLoaded = false;
     notifyListeners();
     try {
-      final movies = await _imdb.fetchTrending();
-      if (movies.isNotEmpty) {
-        _trendingMovies = movies;
-        _trendingLoadedAt = DateTime.now();
+      final results = await Future.wait([
+        _imdb.fetchTrending(),
+        _imdb.fetchActiveMovies(),
+      ]);
+      final trending = results[0];
+      final catalog = results[1];
+      if (trending.isNotEmpty || catalog.isNotEmpty) {
+        final seen = trending.map((m) => m.id).toSet();
+        _trendingMovies = [
+          ...trending,
+          ...catalog.where((m) => seen.add(m.id)),
+        ];
+        if (trending.isNotEmpty) _trendingLoadedAt = DateTime.now();
       }
     } catch (_) {} // keep existing data on failure
     finally {

@@ -18,6 +18,8 @@ class WatchlistService {
   int _generation = 0;
   Timer? _pingTimer;
 
+  void Function()? onServerDown;
+
   final _controller = StreamController<WatchlistEvent>.broadcast();
   Stream<WatchlistEvent> get events => _controller.stream;
 
@@ -35,6 +37,14 @@ class WatchlistService {
     _channel = WebSocketChannel.connect(
       Uri.parse('$_wsBase?watchlistId=$watchlistId'),
     );
+
+    // Catch handshake failures — without this, WebSocketChannelException
+    // from a failed upgrade is unhandled and crashes the error zone.
+    _channel!.ready.catchError((_) {
+      if (_watchlistId == watchlistId && _generation == gen) {
+        onServerDown?.call();
+      }
+    });
 
     _channel!.stream.listen(
       (raw) {

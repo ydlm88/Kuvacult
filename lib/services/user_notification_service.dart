@@ -15,6 +15,8 @@ class UserNotificationService {
   Timer? _reconnectTimer;
   bool _disposed = false;
 
+  void Function()? onServerDown;
+
   void connect(String userId) {
     _userId = userId;
     _reconnectTimer?.cancel();
@@ -27,6 +29,13 @@ class UserNotificationService {
     _channel = WebSocketChannel.connect(
       Uri.parse('$_wsBase?userId=${Uri.encodeQueryComponent(_userId!)}'),
     );
+
+    // Catch handshake failures — without this, WebSocketChannelException
+    // from a failed upgrade is unhandled and crashes the error zone.
+    _channel!.ready.catchError((_) {
+      onServerDown?.call();
+    });
+
     _channel!.stream.listen(
       (raw) {
         try {
