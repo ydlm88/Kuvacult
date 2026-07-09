@@ -1,4 +1,4 @@
-#define version "0.4.2"
+#define version "0.4.3"
 #define name "Kuvacult"
 #define pub "ydlm88"
 
