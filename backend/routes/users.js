@@ -130,6 +130,20 @@ module.exports = function (rooms, broadcastToUser) {
                     avatarUrl,
                     req.params.id,
                 ]);
+                await query('UPDATE review_comments SET by_avatar_url = $1 WHERE by_id = $2', [
+                    avatarUrl,
+                    req.params.id,
+                ]);
+            }
+            if (displayName !== undefined) {
+                await query('UPDATE reviews SET by_name = $1 WHERE by_id = $2', [
+                    displayName,
+                    req.params.id,
+                ]);
+                await query('UPDATE review_comments SET by_name = $1 WHERE by_id = $2', [
+                    displayName,
+                    req.params.id,
+                ]);
             }
             res.json(userShape(r.rows[0]));
         } catch (err) {
@@ -505,7 +519,7 @@ module.exports = function (rooms, broadcastToUser) {
     // Shared helpers
     const MOVIES_WITH_MEDIA = `
   SELECT m.id, m.watchlist_id, m.title, m.year, m.stream_id, m.added_by,
-         m.section, m.stars, m.reactions, m.notes, m.added_at,
+         m.section, m.stars, m.notes, m.added_at,
          CASE WHEN m.runtime > 0 THEN m.runtime ELSE COALESCE(med.runtime, 0) END AS runtime,
          CASE WHEN m.rating  > 0 THEN m.rating  ELSE COALESCE(med.rating,  0) END AS rating,
          CASE WHEN m.genres IS DISTINCT FROM '[]'::jsonb THEN m.genres ELSE COALESCE(med.genres, '[]'::jsonb) END AS genres,
@@ -531,7 +545,6 @@ module.exports = function (rooms, broadcastToUser) {
             synopsis: row.synopsis,
             imageUrl: row.image_url,
             stars: row.stars ?? {},
-            reactions: row.reactions ?? {},
             notes: row.notes ?? [],
             addedAt: row.added_at,
         };

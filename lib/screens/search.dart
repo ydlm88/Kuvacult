@@ -29,6 +29,7 @@ class _SearchScreenState extends State<SearchScreen> {
   final _ctrl = TextEditingController();
   final _trendingScroll = ScrollController();
   Timer? _debounce;
+  bool _showWatchlistFilter = false;
 
   @override
   void initState() {
@@ -77,6 +78,9 @@ class _SearchScreenState extends State<SearchScreen> {
     final selectedGenre = context.select<AppState, String?>((s) => s.selectedGenre);
     final genreLoading = context.select<AppState, bool>((s) => s.genreLoading);
     final genreResults = context.select<AppState, List<Movie>>((s) => s.genreResults);
+    final genreLoadingMore = context.select<AppState, bool>((s) => s.genreLoadingMore);
+    final hasMoreGenre = context.select<AppState, bool>((s) => s.hasMoreGenreResults);
+    final genreWatchlistResults = context.select<AppState, List<Movie>>((s) => s.genreWatchlistResults);
     final state = context.read<AppState>();
 
     return Scaffold(
@@ -292,12 +296,13 @@ class _SearchScreenState extends State<SearchScreen> {
           ]
 
           else if (selectedGenre != null) ...[
-            // Active genre filter header with clear button
+            // Active genre filter header with clear + "In Your Lists" toggle
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
                 child: Row(
                   children: [
+                    // Genre tag + clear
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
@@ -311,12 +316,40 @@ class _SearchScreenState extends State<SearchScreen> {
                               style: MT.mono(size: 11, color: MC.accentInk, letterSpacing: 1)),
                           const SizedBox(width: 6),
                           GestureDetector(
-                            onTap: () => state.clearGenreSearch(),
+                            onTap: () {
+                              setState(() => _showWatchlistFilter = false);
+                              state.clearGenreSearch();
+                            },
                             child: const Icon(Icons.close_rounded, color: MC.accentInk, size: 14),
                           ),
                         ],
                       ),
                     ),
+                    const SizedBox(width: 8),
+                    // "In Your Lists" toggle chip
+                    if (genreWatchlistResults.isNotEmpty)
+                      GestureDetector(
+                        onTap: () => setState(() => _showWatchlistFilter = !_showWatchlistFilter),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 160),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: _showWatchlistFilter
+                                ? MC.accent1.withAlpha(30)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: _showWatchlistFilter ? MC.accent1 : MC.line,
+                              width: 0.5,
+                            ),
+                          ),
+                          child: Text('In Your Lists',
+                              style: MT.mono(
+                                  size: 11,
+                                  color: _showWatchlistFilter ? MC.accent1 : MC.dim,
+                                  letterSpacing: 1)),
+                        ),
+                      ),
                     const Spacer(),
                     Text('GENRE', style: MT.mono(size: 10, letterSpacing: 2)),
                   ],
@@ -333,33 +366,80 @@ class _SearchScreenState extends State<SearchScreen> {
                   ),
                 ),
               )
-            else if (genreResults.isEmpty)
-              const SliverToBoxAdapter(
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(20, 8, 20, 0),
-                  child: Text(
-                    'No results for this genre.',
-                    style: TextStyle(color: MC.dim, fontSize: 13),
+            else if (_showWatchlistFilter) ...[
+              if (genreWatchlistResults.isEmpty)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(20, 8, 20, 0),
+                    child: Text('None of your watchlist films match this genre.',
+                        style: TextStyle(color: MC.dim, fontSize: 13)),
                   ),
-                ),
-              )
-            else
-              SliverList(
-                delegate: SliverChildBuilderDelegate(
-                  (ctx, i) => RepaintBoundary(
-                    child: _SearchResultRow(
-                      movie: genreResults[i],
-                      onAdd: () => _addMovie(context, genreResults[i]),
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => DetailScreen(movie: genreResults[i])),
+                )
+              else
+                SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (ctx, i) => RepaintBoundary(
+                      child: _SearchResultRow(
+                        movie: genreWatchlistResults[i],
+                        onAdd: () => _addMovie(context, genreWatchlistResults[i]),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => DetailScreen(movie: genreWatchlistResults[i])),
+                        ),
                       ),
                     ),
+                    childCount: genreWatchlistResults.length,
+                    addRepaintBoundaries: false,
                   ),
-                  childCount: genreResults.length,
-                  addRepaintBoundaries: false,
                 ),
-              ),
+            ] else ...[
+              if (genreResults.isEmpty)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(20, 8, 20, 0),
+                    child: Text('No results for this genre.',
+                        style: TextStyle(color: MC.dim, fontSize: 13)),
+                  ),
+                )
+              else
+                SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (ctx, i) => RepaintBoundary(
+                      child: _SearchResultRow(
+                        movie: genreResults[i],
+                        onAdd: () => _addMovie(context, genreResults[i]),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => DetailScreen(movie: genreResults[i])),
+                        ),
+                      ),
+                    ),
+                    childCount: genreResults.length,
+                    addRepaintBoundaries: false,
+                  ),
+                ),
+              if (hasMoreGenre || genreLoadingMore)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+                    child: genreLoadingMore
+                        ? const Center(child: CircularProgressIndicator(color: MC.accent1, strokeWidth: 2))
+                        : GestureDetector(
+                            onTap: () => state.loadMoreGenreResults(),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: MC.line, width: 0.5),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              alignment: Alignment.center,
+                              child: Text('Load more',
+                                  style: MT.mono(size: 11, color: MC.accent1, letterSpacing: 1)),
+                            ),
+                          ),
+                  ),
+                ),
+            ],
           ]
 
           else ...[

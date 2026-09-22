@@ -6,6 +6,12 @@
     <!-- Older Android versions (< 13) need this instead -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"/>
+    <!-- Séance: microphone and screen capture -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
+    <!-- Séance: keep screen on during movie streaming -->
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
 
     <application
         android:label="kuvacult"
@@ -36,6 +42,11 @@
                  com.example.kuvacult://dev-wdn5ybqovbac1hkc.us.auth0.com/android/com.example.kuvacult/callback
             -->
         </activity>
+        <!-- Séance: foreground service required for MediaProjection screen capture -->
+        <service
+            android:name="com.livekit.android.service.ScreenCaptureService"
+            android:foregroundServiceType="mediaProjection"
+            android:exported="false"/>
         <!-- Flutter plugin registration -->
         <meta-data
             android:name="flutterEmbedding"

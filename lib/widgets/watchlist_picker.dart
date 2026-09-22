@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../models.dart';
 import '../theme.dart';
+import '../utils/top_toast.dart';
 
 // Adds a movie to a watchlist. Behaviour depends on how many lists the user has
 void showWatchlistPicker(BuildContext context, Movie movie) {
@@ -35,13 +36,7 @@ void showWatchlistPicker(BuildContext context, Movie movie) {
 }
 
 void _showSnackBar(BuildContext context, String text) {
-  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-    content: Text(text, style: const TextStyle(color: MC.ink, fontSize: 13)),
-    backgroundColor: MC.bg1,
-    behavior: SnackBarBehavior.floating,
-    margin: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-  ));
+  showTopToast(context, text);
 }
 
 void _promptCreateAndAdd(BuildContext context, AppState state, Movie movie) {
@@ -185,19 +180,8 @@ class _PickerSheetState extends State<_PickerSheet> {
                       : () {
                           state.addMovieToWatchlist(widget.movie,
                               watchlistId: wl.id);
-                          final messenger = ScaffoldMessenger.of(context);
                           Navigator.pop(context);
-                          messenger.showSnackBar(SnackBar(
-                            content: Text('Added to ${wl.name}',
-                                style: const TextStyle(
-                                    color: MC.ink, fontSize: 13)),
-                            backgroundColor: MC.bg1,
-                            behavior: SnackBarBehavior.floating,
-                            margin:
-                                const EdgeInsets.fromLTRB(20, 0, 20, 16),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12)),
-                          ));
+                          showTopToast(context, 'Added to ${wl.name}');
                         },
                 );
               },

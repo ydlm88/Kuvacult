@@ -16,6 +16,8 @@ async function arrayAdd(table, col, val, rowId) {
     );
 }
 
+let _broadcastToUser = () => {};
+
 // POST /friend-requests
 router.post('/', requireAuth, async (req, res) => {
     try {
@@ -26,7 +28,7 @@ router.post('/', requireAuth, async (req, res) => {
             return res.status(400).json({ error: 'Cannot send a friend request to yourself' });
         if (req.user.sub !== fromId) return res.status(403).json({ error: 'Forbidden' });
 
-        const fromR = await query('SELECT friend_ids FROM users WHERE id = $1', [fromId]);
+        const fromR = await query('SELECT friend_ids, display_name, username, avatar_url FROM users WHERE id = $1', [fromId]);
         if (!fromR.rows.length) return res.status(404).json({ error: 'Sender not found' });
         if ((fromR.rows[0].friend_ids ?? []).includes(toId))
             return res.status(409).json({ error: 'Already friends' });
@@ -43,6 +45,18 @@ router.post('/', requireAuth, async (req, res) => {
             `INSERT INTO friend_requests (id, from_id, to_id, status) VALUES ($1, $2, $3, 'pending')`,
             [id, fromId, toId]
         );
+
+        // Push real-time notification to recipient
+        const u = fromR.rows[0];
+        _broadcastToUser(toId, {
+            type: 'friend_request',
+            requestId: id,
+            fromId,
+            fromName: u.display_name || '',
+            fromHandle: u.username || '',
+            fromAvatarUrl: u.avatar_url || null,
+        });
+
         res.status(201).json({ id, fromId, toId, status: 'pending' });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -91,4 +105,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
     }
 });
 
-module.exports = router;
+module.exports = (broadcastToUser) => {
+    _broadcastToUser = broadcastToUser;
+    return router;
+};

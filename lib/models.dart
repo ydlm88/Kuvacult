@@ -3,6 +3,30 @@ import 'package:flutter/material.dart';
 
 enum WatchSection { want, watching, watched }
 
+class SeanceSession {
+  final String watchlistId;
+  final String hostId;
+  final String hostName;
+  final String? hostAvatarUrl;
+  final String livekitRoom;
+
+  const SeanceSession({
+    required this.watchlistId,
+    required this.hostId,
+    required this.hostName,
+    this.hostAvatarUrl,
+    required this.livekitRoom,
+  });
+
+  factory SeanceSession.fromJson(Map<String, dynamic> j) => SeanceSession(
+        watchlistId: j['watchlistId'] as String? ?? '',
+        hostId: j['hostId'] as String? ?? '',
+        hostName: j['hostName'] as String? ?? '',
+        hostAvatarUrl: j['hostAvatarUrl'] as String?,
+        livekitRoom: j['livekitRoom'] as String? ?? '',
+      );
+}
+
 extension WatchSectionExt on WatchSection {
   String get label {
     switch (this) {
@@ -16,40 +40,6 @@ extension WatchSectionExt on WatchSection {
   }
 }
 
-//Reactions need heavy rework
-enum ReactionType { loved, cried, meh, cozy, want }
-
-extension ReactionTypeExt on ReactionType {
-  String get label {
-    switch (this) {
-      case ReactionType.loved:
-        return 'Loved it';
-      case ReactionType.cried:
-        return 'Cried';
-      case ReactionType.meh:
-        return 'Meh';
-      case ReactionType.cozy:
-        return 'Cozy';
-      case ReactionType.want:
-        return 'Want';
-    }
-  }
-
-  String get mark {
-    switch (this) {
-      case ReactionType.loved:
-        return '♥';
-      case ReactionType.cried:
-        return '~';
-      case ReactionType.meh:
-        return '·';
-      case ReactionType.cozy:
-        return '◐';
-      case ReactionType.want:
-        return '+';
-    }
-  }
-}
 
 class PosterData {
   final Gradient gradient;
@@ -76,7 +66,7 @@ class MovieNote {
 class Review {
   final String id;
   final String byId;
-  final String byName;
+  String byName;
   final String byHandle;
   final Color byAvatarColor;
   final String? byAvatarUrl;
@@ -156,7 +146,6 @@ class Movie {
   WatchSection section;
   final String synopsis;
   final String mediaType;
-  Map<String, ReactionType> reactions;
   Map<String, double> stars;
   List<MovieNote> notes;
   List<String> watchedBy;
@@ -175,13 +164,11 @@ class Movie {
     required this.section,
     required this.synopsis,
     this.mediaType = 'movie',
-    Map<String, ReactionType>? reactions,
     Map<String, double>? stars,
     List<MovieNote>? notes,
     List<String>? watchedBy,
     required this.poster,
-  })  : reactions = reactions ?? {},
-        stars = stars ?? {},
+  })  : stars = stars ?? {},
         notes = notes ?? [],
         watchedBy = watchedBy ?? [];
 }
@@ -284,14 +271,13 @@ class FriendRequest {
   });
 }
 
-enum ActivityKind { added, reacted, note, rated, moved, vetoPick, vetoed, watched, postedReview }
+enum ActivityKind { added, note, rated, moved, vetoPick, vetoed, watched, postedReview }
 
 class ActivityEvent {
   final String? id;
   final ActivityKind kind;
   final String who;
   final String? movieId;
-  final ReactionType? reaction;
   final double? stars;
   final String? to;
   final List<String>? picks;
@@ -303,7 +289,6 @@ class ActivityEvent {
     required this.who,
     this.id,
     this.movieId,
-    this.reaction,
     this.stars,
     this.to,
     this.picks,

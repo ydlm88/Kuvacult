@@ -63,7 +63,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
             child: Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: ChipFilter(
-                items: const ['All', 'Notes', 'Reactions', 'Ratings', 'Moves'],
+                items: const ['All', 'Notes', 'Ratings', 'Moves'],
                 active: _filter,
                 onSelect: (s) => setState(() => _filter = s),
               ),
@@ -121,8 +121,6 @@ class _ActivityScreenState extends State<ActivityScreen> {
     switch (_filter) {
       case 'Notes':
         return all.where((a) => a.kind == ActivityKind.note).toList();
-      case 'Reactions':
-        return all.where((a) => a.kind == ActivityKind.reacted).toList();
       case 'Ratings':
         return all.where((a) => a.kind == ActivityKind.rated).toList();
       case 'Moves':
@@ -263,15 +261,6 @@ class ActivityItem extends StatelessWidget {
           const TextSpan(text: 'added '),
           if (titleSpan != null) titleSpan,
           const TextSpan(text: ' to the queue'),
-        ];
-      case ActivityKind.reacted:
-        return [
-          const TextSpan(text: 'reacted '),
-          TextSpan(
-              text: event.reaction?.label ?? '',
-              style: const TextStyle(color: MC.accent1)),
-          const TextSpan(text: ' on '),
-          if (titleSpan != null) titleSpan,
         ];
       case ActivityKind.note:
         return [

@@ -15,6 +15,7 @@ app.use(express.urlencoded({ extended: false }));
 app.use(reqStatsMiddleware);
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/posters', express.static(path.join(__dirname, 'posters')));
 
 // Restrict /admin to loopback only
 function requireLocalhost(req, res, next) {
@@ -27,11 +28,12 @@ function requireLocalhost(req, res, next) {
 }
 
 app.use('/auth', require('./routes/auth'));
-app.use('/friend-requests', require('./routes/friendRequests'));
+app.use('/friend-requests', require('./routes/friendRequests')(broadcastToUser));
 app.use('/movies', require('./routes/movies'));
 app.use('/reviews', require('./routes/reviews')(broadcastToUser));
 app.use('/import', require('./routes/import'));
 app.use('/admin', requireLocalhost, require('./routes/admin'));
+app.use('/seance', require('./routes/seance')(broadcastToUser, broadcast));
 
 app.get('/', (req, res) => res.json({ status: 'Kuvacult API running' }));
 
@@ -221,34 +223,33 @@ async function resolveRound(watchlistId, session) {
     const houseTotal = handValue(houseHand);
     const houseBust = houseTotal > 21;
 
-    let winner = null,
-        bestVal = -1;
-    for (const p of bj.players) {
+    // All players who beat the house; winner movie chosen randomly among them
+    const beaters = bj.players.filter((p) => {
         const v = handValue(p.hand);
-        if (v <= 21 && (houseBust || v > houseTotal) && v > bestVal) {
-            bestVal = v;
-            winner = p;
-        }
-    }
+        return v <= 21 && (houseBust || v > houseTotal);
+    });
+    const winMovieId = beaters.length
+        ? beaters[Math.floor(Math.random() * beaters.length)].betMovieId
+        : null;
 
     const updatedBj = {
         ...bj,
         house: houseHand,
         houseRevealed: true,
-        status: winner ? 'done' : 'redeal',
-        winnerId: winner?.betMovieId ?? null,
+        status: winMovieId ? 'done' : 'redeal',
+        winnerId: winMovieId,
     };
 
-    if (winner) {
+    if (winMovieId) {
         await updateSession(watchlistId, {
             status: 'done',
-            winnerId: winner.betMovieId,
+            winnerId: winMovieId,
             blackjack: updatedBj,
         });
         broadcast(watchlistId, { type: 'blackjack_update', blackjack: updatedBj });
         broadcast(watchlistId, {
             type: 'veto_winner',
-            winnerId: winner.betMovieId,
+            winnerId: winMovieId,
             via: 'blackjack',
         });
         await query(
@@ -611,7 +612,9 @@ async function handleMessage(watchlistId, msg) {
 
 // Start
 migrate()
-    .then(() => {
+    .then(async () => {
+        // Séances are ephemeral — clear any stale sessions left from the previous run.
+        await query('DELETE FROM seance_sessions').catch(() => {});
         server.listen(process.env.PORT || 3000, () =>
             console.log(`Server running on port ${process.env.PORT || 3000}`)
         );

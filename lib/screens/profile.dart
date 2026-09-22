@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart' hide Config;
 import '../widgets/app_image.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -22,6 +23,7 @@ import 'friends.dart';
 import 'letterboxd_import.dart';
 import 'invites_screen.dart';
 import 'onboarding.dart';
+import '../utils/top_toast.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -41,6 +43,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int _watchlistPage = 0;
   String _watchlistSearch = '';
   final _watchlistSearchCtrl = TextEditingController();
+
+  // Cached so ProfileBannerWidget doesn't get a new list identity every build
+  List<String> _bannerPosters = const [];
+  String _bannerCacheKey = '';
+  List<String>? _lastCustomBanners;
 
   @override
   void dispose() {
@@ -90,16 +97,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ? avatarColors[user.id.hashCode.abs() % avatarColors.length]
         : const Color(0xFFF6C453);
 
-    final autoBannerPosters = (List<Review>.from(reviews)
-          ..sort((a, b) => b.stars.compareTo(a.stars)))
-        .where((r) => r.moviePosterUrl != null && r.moviePosterUrl!.isNotEmpty)
-        .take(4)
-        .map((r) {
-          final u = r.moviePosterUrl!;
-          return u.startsWith('/') ? '${Config.httpBase}$u' : u;
-        })
-        .toList();
-    final bannerPosters = state.customBannerUrls ?? autoBannerPosters;
+    final customBanners = state.customBannerUrls;
+    if (customBanners != null) {
+      if (!identical(customBanners, _lastCustomBanners)) {
+        _bannerPosters = customBanners;
+        _lastCustomBanners = customBanners;
+      }
+    } else {
+      _lastCustomBanners = null;
+      final cacheKey = reviews
+          .where((r) => r.moviePosterUrl?.isNotEmpty == true)
+          .take(8)
+          .map((r) => r.moviePosterUrl!)
+          .join(',');
+      if (cacheKey != _bannerCacheKey) {
+        _bannerCacheKey = cacheKey;
+        _bannerPosters = (List<Review>.from(reviews)
+              ..sort((a, b) => b.stars.compareTo(a.stars)))
+            .where((r) => r.moviePosterUrl != null && r.moviePosterUrl!.isNotEmpty)
+            .take(4)
+            .map((r) {
+              final u = r.moviePosterUrl!;
+              return u.startsWith('/') ? '${Config.httpBase}$u' : u;
+            })
+            .toList();
+      }
+    }
 
     return Scaffold(
       backgroundColor: MC.bg0,
@@ -117,7 +140,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       Positioned(
                         top: 0, left: 0, right: 0, height: 160,
                         child: ProfileBannerWidget(
-                          posterUrls: bannerPosters,
+                          posterUrls: _bannerPosters,
                           avatarColor: avatarColor,
                         ),
                       ),
@@ -409,35 +432,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ),
           ],
-
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 28, 20, 12),
-              child: Text('My Room - Coming Soon..', style: MT.display(size: 22)),
-            ),
-          ),
-          SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            sliver: SliverToBoxAdapter(
-              child: Column(
-                children: [
-                  if (user?.roomKey != null)
-                    _RoomCodeCard(
-                        roomKey: user!.roomKey!, parentContext: context)
-                  else
-                    _CreateRoomCard(
-                      onGenerate: () {
-                        if (context.read<AppState>().isGuest) {
-                          showSignInSheet(context);
-                        } else {
-                          context.read<AppState>().generateRoomKey();
-                        }
-                      },
-                    ),
-                ],
-              ),
-            ),
-          ),
 
           SliverToBoxAdapter(
             child: Padding(
@@ -1152,152 +1146,6 @@ class _ProfileAvatar extends StatelessWidget {
   }
 }
 
-class _RoomCodeCard extends StatelessWidget {
-  final String roomKey;
-  final BuildContext parentContext;
-
-  const _RoomCodeCard(
-      {required this.roomKey, required this.parentContext});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: MC.bg1,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-            color: MC.accent1.withAlpha(80), width: 0.5),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text('YOUR ROOM CODE',
-                  style: MT.mono(size: 10, letterSpacing: 2)),
-              const Spacer(),
-              GestureDetector(
-                onTap: () =>
-                    context.read<AppState>().generateRoomKey(),
-                child: Text('Regenerate',
-                    style: MT.mono(
-                        size: 10,
-                        color: MC.accent1,
-                        letterSpacing: 1)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          GestureDetector(
-            onTap: () {
-              Clipboard.setData(ClipboardData(text: roomKey));
-              ScaffoldMessenger.of(parentContext).showSnackBar(
-                SnackBar(
-                  content: const Text('Room code copied',
-                      style:
-                          TextStyle(color: MC.ink, fontSize: 13)),
-                  backgroundColor: MC.bg1,
-                  behavior: SnackBarBehavior.floating,
-                  margin:
-                      const EdgeInsets.fromLTRB(20, 0, 20, 104),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-              );
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 16, vertical: 14),
-              decoration: BoxDecoration(
-                color: MC.bg2,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  Flexible(
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        roomKey.split('').join('  '),
-                        style: MT.mono(
-                            size: 24,
-                            letterSpacing: 4,
-                            color: MC.accent1),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  const Icon(Icons.copy_rounded,
-                      color: MC.mute, size: 18),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            'Share this with friends — they enter it to join your room.',
-            style: TextStyle(
-                color: MC.mute, fontSize: 12, height: 1.4),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CreateRoomCard extends StatelessWidget {
-  final VoidCallback onGenerate;
-
-  const _CreateRoomCard({required this.onGenerate});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: MC.bg1,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: MC.line, width: 0.5),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Start a Room', style: MT.display(size: 18, letterSpacing: -0.5)),
-          const SizedBox(height: 6),
-          const Text(
-            'Generate a unique 6-character code. Friends enter it to join your shared room.',
-            style: TextStyle(
-                color: MC.mute, fontSize: 13, height: 1.45),
-          ),
-          const SizedBox(height: 16),
-          GestureDetector(
-            onTap: onGenerate,
-            child: Container(
-              width: double.infinity,
-              height: 46,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                    colors: [MC.accent1, MC.accent2],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              alignment: Alignment.center,
-              child: const Text('Generate Room Code',
-                  style: TextStyle(
-                      color: MC.accentInk,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _JoinListCard extends StatefulWidget {
   const _JoinListCard();
 
@@ -1332,12 +1180,12 @@ class _JoinListCardState extends State<_JoinListCard> {
               textCapitalization: TextCapitalization.characters,
               maxLength: 6,
               style: MT.mono(size: 15, letterSpacing: 3, color: MC.ink),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 hintText: 'Enter list key',
                 hintStyle: TextStyle(
                     color: MC.dim,
                     fontSize: 13,
-                    fontFamily: 'monospace',
+                    fontFamily: GoogleFonts.martianMono().fontFamily,
                     letterSpacing: 0),
                 isDense: true,
                 contentPadding: EdgeInsets.zero,
@@ -1380,14 +1228,7 @@ class _JoinListCardState extends State<_JoinListCard> {
       await context.read<AppState>().joinRoomByKey(_ctrl.text);
       if (mounted) {
         _ctrl.clear();
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Text('Watchlist joined!',
-              style: TextStyle(color: MC.ink, fontSize: 13)),
-          backgroundColor: MC.bg1,
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ));
+        showTopToast(context, 'Watchlist joined!');
       }
     } finally {
       if (mounted) setState(() => _joining = false);
@@ -1793,17 +1634,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
     final bytes = await image.readAsBytes();
     if (bytes.length > 50 * 1024) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Image too large — max 50 KB',
-                style: TextStyle(color: MC.ink, fontSize: 13)),
-            backgroundColor: MC.bg1,
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
-          ),
-        );
+        showTopToast(context, 'Image too large — max 50 KB');
       }
       return;
     }
@@ -1827,15 +1658,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
     } catch (e) {
       if (mounted) {
         final msg = e is ApiException ? e.message : 'Failed to save — please try again';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(msg, style: const TextStyle(color: MC.ink, fontSize: 13)),
-            backgroundColor: MC.bg1,
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-        );
+        showTopToast(context, msg);
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -2421,26 +2244,12 @@ class _BugReportSheetState extends State<_BugReportSheet> {
           text: _ctrl.text.trim(), userId: widget.userId);
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Text('Bug report sent — thanks!',
-              style: TextStyle(color: MC.ink, fontSize: 13)),
-          backgroundColor: MC.bg1,
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ));
+        showTopToast(context, 'Bug report sent — thanks!');
       }
     } catch (_) {
       if (mounted) {
         setState(() => _sending = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Text('Failed to send — please try again.',
-              style: TextStyle(color: MC.ink, fontSize: 13)),
-          backgroundColor: MC.bg1,
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ));
+        showTopToast(context, 'Failed to send — please try again.');
       }
     }
   }

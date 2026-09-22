@@ -12,6 +12,7 @@ import '../services/api_service.dart';
 import 'detail.dart';
 import 'user_profile.dart';
 import 'activity.dart';
+import '../utils/top_toast.dart';
 
 String _timeAgo(DateTime dt) {
   final diff = DateTime.now().difference(dt);
@@ -56,7 +57,15 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final state = context.read<AppState>();
       state.loadPublicReviews();
-      state.loadCommunityTopWatchlists();
+      state.loadCommunityTopWatchlists().then((_) {
+        if (!mounted) return;
+        // Pre-fetch poster URLs for all watchlists so the "see all" grid
+        // has them ready before the user navigates there.
+        for (final wl in context.read<AppState>().communityTopWatchlists) {
+          final id = wl['id'] as String?;
+          if (id != null && id.isNotEmpty) _fetchCommunityPosters(id);
+        }
+      });
     });
   }
 
@@ -1181,9 +1190,22 @@ class _ExploreListScreenState extends State<_ExploreListScreen> {
   void initState() {
     super.initState();
     if (widget.type == 'watchlists') {
+      // Pre-fetch posters for whatever is already cached before the grid renders.
+      _prefetchPosters(context.read<AppState>().communityTopWatchlists);
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        context.read<AppState>().loadCommunityTopWatchlists();
+        if (!mounted) return;
+        context.read<AppState>().loadCommunityTopWatchlists().then((_) {
+          if (!mounted) return;
+          _prefetchPosters(context.read<AppState>().communityTopWatchlists);
+        });
       });
+    }
+  }
+
+  void _prefetchPosters(List<Map<String, dynamic>> watchlists) {
+    for (final wl in watchlists) {
+      final id = wl['id'] as String?;
+      if (id != null && id.isNotEmpty) _fetchCommunityPosters(id);
     }
   }
 
@@ -2077,23 +2099,28 @@ Widget _moviePlaceholder() => Container(
     );
 
 final _communityPosterCache = <String, List<String>>{};
+final _communityPosterFetch = <String, Future<List<String>>>{};
 
-Future<List<String>> _fetchCommunityPosters(String watchlistId) async {
+Future<List<String>> _fetchCommunityPosters(String watchlistId) {
   if (_communityPosterCache.containsKey(watchlistId)) {
-    return _communityPosterCache[watchlistId]!;
+    return Future.value(_communityPosterCache[watchlistId]!);
   }
-  try {
-    final data = await ApiService.fetchWatchlistById(watchlistId);
-    final movies = data['movies'] as List? ?? [];
-    final urls = movies
-        .map((m) => (m as Map<String, dynamic>)['imageUrl'] as String? ?? '')
-        .where((u) => u.isNotEmpty)
-        .take(4)
-        .toList();
-    return _communityPosterCache[watchlistId] = urls;
-  } catch (_) {
-    return _communityPosterCache[watchlistId] = [];
-  }
+  return _communityPosterFetch.putIfAbsent(watchlistId, () async {
+    try {
+      final data = await ApiService.fetchWatchlistById(watchlistId);
+      final movies = data['movies'] as List? ?? [];
+      final urls = movies
+          .map((m) => (m as Map<String, dynamic>)['imageUrl'] as String? ?? '')
+          .where((u) => u.isNotEmpty)
+          .take(4)
+          .toList();
+      _communityPosterFetch.remove(watchlistId);
+      return _communityPosterCache[watchlistId] = urls;
+    } catch (_) {
+      _communityPosterFetch.remove(watchlistId);
+      return _communityPosterCache[watchlistId] = [];
+    }
+  });
 }
 
 class _WatchlistFanCard extends StatefulWidget {
@@ -2126,9 +2153,14 @@ class _WatchlistFanCardState extends State<_WatchlistFanCard> {
   void initState() {
     super.initState();
     if (widget.watchlistId.isNotEmpty) {
-      _fetchCommunityPosters(widget.watchlistId).then((urls) {
-        if (mounted) setState(() => _posters = urls);
-      });
+      final cached = _communityPosterCache[widget.watchlistId];
+      if (cached != null) {
+        _posters = cached;
+      } else {
+        _fetchCommunityPosters(widget.watchlistId).then((urls) {
+          if (mounted) setState(() => _posters = urls);
+        });
+      }
     }
   }
 
@@ -2226,6 +2258,7 @@ class _WatchlistFanCardState extends State<_WatchlistFanCard> {
                 child: AppImage(
                   imageUrl: _posters[i],
                   fit: BoxFit.cover,
+                  cacheByHeight: true,
                   fadeInDuration: const Duration(milliseconds: 200),
                   placeholder: (_, __) => Container(color: MC.bg2),
                   errorWidget: (_, __, ___) => Container(color: MC.bg2),
@@ -2279,13 +2312,30 @@ class _WatchlistGridPosterCard extends StatefulWidget {
 class _WatchlistGridPosterCardState extends State<_WatchlistGridPosterCard> {
   List<String> _posters = [];
 
+  void _loadPosters(String watchlistId) {
+    if (watchlistId.isEmpty) return;
+    final cached = _communityPosterCache[watchlistId];
+    if (cached != null) {
+      _posters = cached;
+    } else {
+      _fetchCommunityPosters(watchlistId).then((urls) {
+        if (mounted) setState(() => _posters = urls);
+      });
+    }
+  }
+
   @override
   void initState() {
     super.initState();
-    if (widget.watchlistId.isNotEmpty) {
-      _fetchCommunityPosters(widget.watchlistId).then((urls) {
-        if (mounted) setState(() => _posters = urls);
-      });
+    _loadPosters(widget.watchlistId);
+  }
+
+  @override
+  void didUpdateWidget(covariant _WatchlistGridPosterCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.watchlistId != oldWidget.watchlistId) {
+      _posters = [];
+      _loadPosters(widget.watchlistId);
     }
   }
 
@@ -2360,14 +2410,13 @@ class _WatchlistGridPosterCardState extends State<_WatchlistGridPosterCard> {
   }
 
   Widget _buildMosaic() {
-    Widget img(String url) => SizedBox.expand(
-      child: AppImage(
-        imageUrl: url,
-        fit: BoxFit.cover,
-        fadeInDuration: const Duration(milliseconds: 200),
-        placeholder: (_, __) => Container(color: MC.bg2),
-        errorWidget: (_, __, ___) => Container(color: MC.bg2),
-      ),
+    Widget img(String url) => AppImage(
+      imageUrl: url,
+      fit: BoxFit.cover,
+      cacheByHeight: true,
+      fadeInDuration: const Duration(milliseconds: 200),
+      placeholder: (_, __) => Container(color: MC.bg2),
+      errorWidget: (_, __, ___) => Container(color: MC.bg2),
     );
     if (_posters.isEmpty) {
       return Container(
@@ -2691,14 +2740,7 @@ Future<void> showWriteReviewSheet(
 }) async {
   final state = context.read<AppState>();
   if (state.isGuest || !state.isLoggedIn) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: const Text('Sign in to write reviews',
-          style: TextStyle(color: MC.ink)),
-      backgroundColor: MC.bg1,
-      behavior: SnackBarBehavior.floating,
-      margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    ));
+    showTopToast(context, 'Sign in to write reviews');
     return;
   }
 
@@ -2935,8 +2977,13 @@ class _WriteReviewSheetState extends State<_WriteReviewSheet> {
                         setState(() => _submitting = false);
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text('Failed to post review: $e'),
-                            backgroundColor: Colors.red[800],
+                            content: Text('Failed to post review: $e',
+                                style: const TextStyle(color: MC.ink, fontSize: 13)),
+                            backgroundColor: MC.bg1,
+                            behavior: SnackBarBehavior.floating,
+                            margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
                           ),
                         );
                       }

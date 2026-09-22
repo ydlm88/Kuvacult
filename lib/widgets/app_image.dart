@@ -18,6 +18,9 @@ class AppImage extends StatelessWidget {
   final Widget Function(BuildContext, String)? placeholder;
   final Duration fadeInDuration;
   final Duration fadeOutDuration;
+  // Use container height instead of width to drive the decode cache size.
+  // Correct for tall narrow strips (fan layout) where height >> width.
+  final bool cacheByHeight;
 
   const AppImage({
     super.key,
@@ -29,6 +32,7 @@ class AppImage extends StatelessWidget {
     this.placeholder,
     this.fadeInDuration = const Duration(milliseconds: 300),
     this.fadeOutDuration = Duration.zero,
+    this.cacheByHeight = false,
   });
 
   Widget _image(BuildContext context, int? mcw, int? mch) {
@@ -62,12 +66,19 @@ class AppImage extends StatelessWidget {
     }
 
     // Dynamic size: use LayoutBuilder to discover constraints.
-    // Only set memCacheWidth — setting both dimensions forces the image to decode
-    // at the exact container size, destroying aspect ratio when width >> height
-    // (e.g. banner images inside Expanded rows on wide desktop windows).
-    // BoxFit handles the display crop; only width drives decode quality.
+    // cacheByHeight: for tall narrow strips (fan layout) where height >> width,
+    // cache by height so BoxFit.cover doesn't upscale vertically.
+    // Otherwise cache by width only to avoid destroying aspect ratio on wide banners.
     return LayoutBuilder(
       builder: (context, constraints) {
+        if (cacheByHeight) {
+          final mch = constraints.maxHeight.isFinite
+              ? (constraints.maxHeight * dpr).ceil()
+              : (constraints.maxWidth.isFinite
+                  ? (constraints.maxWidth * dpr).ceil()
+                  : null);
+          return _image(context, null, mch);
+        }
         final mcw = constraints.maxWidth.isFinite
             ? (constraints.maxWidth * dpr).ceil()
             : (constraints.maxHeight.isFinite

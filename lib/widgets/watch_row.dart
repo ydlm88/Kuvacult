@@ -15,7 +15,6 @@ class WatchRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final reactionCount = movie.reactions.length;
     final starValues = movie.stars.values.toList();
     final avg = starValues.isEmpty
         ? null
@@ -72,17 +71,6 @@ class WatchRow extends StatelessWidget {
                         ),
                         const Spacer(),
                         AvatarWidget(memberId: movie.addedBy, size: 18),
-                        if (reactionCount > 0) ...[
-                          const SizedBox(width: 6),
-                          Row(
-                            children: [
-                              const Text('●', style: TextStyle(color: MC.accent1, fontSize: 8)),
-                              const SizedBox(width: 2),
-                              Text('$reactionCount',
-                                  style: MT.mono(size: 10, color: MC.mute, letterSpacing: 0)),
-                            ],
-                          ),
-                        ],
                         if (avg != null) ...[
                           const SizedBox(width: 6),
                           Text(avg, style: MT.mono(size: 11, color: MC.mute, letterSpacing: 0)),

@@ -12,7 +12,9 @@ class UserNotificationService {
   Stream<Map<String, dynamic>> get events => _controller.stream;
 
   String? _userId;
+  int _generation = 0;
   Timer? _reconnectTimer;
+  Timer? _pingTimer;
   bool _disposed = false;
 
   void Function()? onServerDown;
@@ -26,6 +28,9 @@ class UserNotificationService {
   void _doConnect() {
     if (_disposed || _userId == null) return;
     _channel?.sink.close();
+    _pingTimer?.cancel();
+
+    final gen = ++_generation;
     _channel = WebSocketChannel.connect(
       Uri.parse('$_wsBase?userId=${Uri.encodeQueryComponent(_userId!)}'),
     );
@@ -33,7 +38,7 @@ class UserNotificationService {
     // Catch handshake failures — without this, WebSocketChannelException
     // from a failed upgrade is unhandled and crashes the error zone.
     _channel!.ready.catchError((_) {
-      onServerDown?.call();
+      if (_generation == gen) onServerDown?.call();
     });
 
     _channel!.stream.listen(
@@ -43,20 +48,31 @@ class UserNotificationService {
           _controller.add(msg);
         } catch (_) {}
       },
-      onError: (_) => _scheduleReconnect(),
-      onDone: () => _scheduleReconnect(),
+      onError: (_) {
+        if (_generation == gen) _scheduleReconnect();
+      },
+      onDone: () {
+        if (_generation == gen) _scheduleReconnect();
+      },
       cancelOnError: false,
     );
+
+    // Keep connection alive — Cloudflare Tunnel has ~100s idle timeout
+    _pingTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      try { _channel?.sink.add('{"type":"ping"}'); } catch (_) {}
+    });
   }
 
   void _scheduleReconnect() {
     if (_disposed) return;
+    _pingTimer?.cancel();
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(const Duration(seconds: 4), _doConnect);
   }
 
   void disconnect() {
     _reconnectTimer?.cancel();
+    _pingTimer?.cancel();
     _channel?.sink.close();
     _channel = null;
     _userId = null;

@@ -166,9 +166,27 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   String? _selectedGenre;
   List<Movie> _genreResults = [];
   bool _genreLoading = false;
+  bool _genreLoadingMore = false;
+  String? _genrePageToken;
   String? get selectedGenre => _selectedGenre;
   List<Movie> get genreResults => List.unmodifiable(_genreResults);
   bool get genreLoading => _genreLoading;
+  bool get genreLoadingMore => _genreLoadingMore;
+  bool get hasMoreGenreResults => _genrePageToken != null;
+
+  /// Movies in the user's own watchlists that match the active genre filter.
+  List<Movie> get genreWatchlistResults {
+    final genre = _selectedGenre;
+    if (genre == null) return const [];
+    final seen = <String>{};
+    final out = <Movie>[];
+    for (final wl in _watchlists) {
+      for (final m in wl.movies) {
+        if (m.genres.contains(genre) && seen.add(m.id)) out.add(m);
+      }
+    }
+    return out;
+  }
 
   final List<ActivityEvent> _activity = [];
   List<ActivityEvent> get activity => List.unmodifiable(_activity);
@@ -550,17 +568,30 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
                    || (d['likedByMe'] as bool? ?? false),
       );
 
-  VetoInvite? _pendingVetoInvite;
-  VetoInvite? get pendingVetoInvite => _pendingVetoInvite;
+  final List<VetoInvite> _pendingVetoInvites = [];
+  List<VetoInvite> get pendingVetoInvites => List.unmodifiable(_pendingVetoInvites);
 
-  // Set when user taps "Join" on the banner — VetoScreen reads this to
+  // Backward-compat: returns first pending invite (used by live banner on non-Ritual tabs).
+  VetoInvite? get pendingVetoInvite => _pendingVetoInvites.isNotEmpty ? _pendingVetoInvites.first : null;
+
+  // Set when user taps "Join" on the banner or inbox — VetoScreen reads this to
   // auto-connect and send veto_join for the right watchlist.
   String? _pendingVetoJoin;
   String? get pendingVetoJoin => _pendingVetoJoin;
 
+  // Total pending ritual invites (séances + veto invites) for inbox badge count.
+  int get ritualInboxCount => _availableSeances.length + _pendingVetoInvites.length;
+
   void acceptVetoInvite() {
-    _pendingVetoJoin = _pendingVetoInvite?.watchlistId;
-    _pendingVetoInvite = null;
+    if (_pendingVetoInvites.isEmpty) return;
+    _pendingVetoJoin = _pendingVetoInvites.first.watchlistId;
+    _pendingVetoInvites.removeAt(0);
+    notifyListeners();
+  }
+
+  void acceptVetoInviteFor(String watchlistId) {
+    _pendingVetoInvites.removeWhere((i) => i.watchlistId == watchlistId);
+    _pendingVetoJoin = watchlistId;
     notifyListeners();
   }
 
@@ -570,12 +601,163 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void dismissVetoInvite() {
-    _pendingVetoInvite = null;
+    if (_pendingVetoInvites.isEmpty) return;
+    _pendingVetoInvites.removeAt(0);
+    notifyListeners();
+  }
+
+  void dismissVetoInviteFor(String watchlistId) {
+    _pendingVetoInvites.removeWhere((i) => i.watchlistId == watchlistId);
     notifyListeners();
   }
 
   final List<WatchlistInvite> _pendingInvites = [];
   List<WatchlistInvite> get pendingInvites => List.unmodifiable(_pendingInvites);
+
+  // Tracks invite IDs whose banners have been dismissed without accepting/declining
+  final Set<String> _dismissedInviteBannerIds = {};
+
+  WatchlistInvite? get pendingWatchlistInviteBanner =>
+      _pendingInvites.where((inv) => !_dismissedInviteBannerIds.contains(inv.id)).firstOrNull;
+
+  void dismissWatchlistInviteBanner(String id) {
+    _dismissedInviteBannerIds.add(id);
+    notifyListeners();
+  }
+
+  // Friend request banner
+  final Set<String> _dismissedFriendRequestBannerIds = {};
+
+  FriendRequest? get pendingFriendRequestBanner {
+    final myId = _currentUser?.id ?? '';
+    return _friendRequests
+        .where((r) =>
+            r.toId == myId &&
+            !r.accepted &&
+            !_dismissedFriendRequestBannerIds.contains(r.id))
+        .firstOrNull;
+  }
+
+  void dismissFriendRequestBanner(String id) {
+    _dismissedFriendRequestBannerIds.add(id);
+    notifyListeners();
+  }
+
+  // Séance banner — highest priority, persistent until joined or séance ends
+  SeanceSession? _pendingSeanceBanner;
+  SeanceSession? get pendingSeanceBanner => _pendingSeanceBanner;
+
+  void dismissSeanceBanner() {
+    _pendingSeanceBanner = null;
+    notifyListeners();
+  }
+
+  SeanceSession? _dismissedSeanceBanner;
+  SeanceSession? get dismissedSeanceBanner => _dismissedSeanceBanner;
+
+  void dismissSeanceBannerAndStore() {
+    _dismissedSeanceBanner = _pendingSeanceBanner;
+    _pendingSeanceBanner = null;
+    notifyListeners();
+  }
+
+  void recallSeanceBanner() {
+    if (_dismissedSeanceBanner == null) return;
+    _pendingSeanceBanner = _dismissedSeanceBanner;
+    _dismissedSeanceBanner = null;
+    notifyListeners();
+  }
+
+  SeanceSession? _pendingSeanceAccept;
+  SeanceSession? get pendingSeanceAccept => _pendingSeanceAccept;
+  void acceptSeanceBanner() {
+    _pendingSeanceAccept = _pendingSeanceBanner ?? _dismissedSeanceBanner;
+    _pendingSeanceBanner = null;
+    _dismissedSeanceBanner = null;
+    notifyListeners();
+  }
+  void clearPendingSeanceAccept() => _pendingSeanceAccept = null;
+
+  // Accept a specific session directly (e.g. from the bell bottom sheet)
+  void acceptSeanceBannerFor(SeanceSession session) {
+    _pendingSeanceAccept = session;
+    if (_pendingSeanceBanner?.watchlistId == session.watchlistId) {
+      _pendingSeanceBanner = null;
+    }
+    if (_dismissedSeanceBanner?.watchlistId == session.watchlistId) {
+      _dismissedSeanceBanner = null;
+    }
+    notifyListeners();
+  }
+
+  // All joinable séances across the user's watchlists (refreshed on session restore + WS events)
+  List<SeanceSession> _availableSeances = [];
+  List<SeanceSession> get availableSeances => List.unmodifiable(_availableSeances);
+
+  // Called by VetoScreen when it detects an active session for the current watchlist.
+  // Ensures the radar shows even if the WS seance_started event was missed.
+  void addAvailableSeanceIfNotPresent(SeanceSession session) {
+    if (_currentUser?.id == session.hostId) return;
+    final exists = _availableSeances.any((s) => s.watchlistId == session.watchlistId);
+    if (!exists) {
+      _availableSeances.add(session);
+      notifyListeners();
+    }
+  }
+
+  Future<void> refreshAvailableSeances() async {
+    try {
+      final sessions = await ApiService.fetchActiveSeances();
+      _availableSeances = sessions.map(SeanceSession.fromJson).toList();
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> refreshVetoInvites() async {
+    try {
+      final lobbies = await ApiService.fetchActiveVetoLobbies();
+      final liveIds = <String>{};
+      final toAdd = <VetoInvite>[];
+      for (final l in lobbies) {
+        final wlId = l['watchlistId'] as String? ?? '';
+        if (_currentUser?.id == (l['fromId'] as String?)) continue;
+        liveIds.add(wlId);
+        if (!_pendingVetoInvites.any((i) => i.watchlistId == wlId)) {
+          toAdd.add(VetoInvite(
+            fromId: l['fromId'] as String? ?? '',
+            fromName: l['fromName'] as String? ?? '',
+            watchlistId: wlId,
+            watchlistName: l['watchlistName'] as String? ?? '',
+          ));
+        }
+      }
+      // Remove any invite whose game has moved past lobby since last check.
+      final before = _pendingVetoInvites.length;
+      _pendingVetoInvites.removeWhere((i) => !liveIds.contains(i.watchlistId));
+      _pendingVetoInvites.addAll(toAdd);
+      if (_pendingVetoInvites.length != before || toAdd.isNotEmpty) notifyListeners();
+    } catch (_) {}
+  }
+
+  // Activity banner (likes, follows) — auto-dismisses after 4 seconds
+  AppNotification? _activeActivityBanner;
+  AppNotification? get activeActivityBanner => _activeActivityBanner;
+  Timer? _activityBannerTimer;
+
+  void _showActivityBanner(AppNotification notif) {
+    _activeActivityBanner = notif;
+    _activityBannerTimer?.cancel();
+    _activityBannerTimer = Timer(const Duration(seconds: 4), () {
+      _activeActivityBanner = null;
+      notifyListeners();
+    });
+  }
+
+  void dismissActivityBanner() {
+    _activityBannerTimer?.cancel();
+    _activeActivityBanner = null;
+    notifyListeners();
+  }
 
   final List<AppNotification> _notifications = [];
   List<AppNotification> get notifications => List.unmodifiable(_notifications);
@@ -584,7 +766,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final rtUnread = _notifications.where((n) => !n.read).length;
     final myId = _currentUser?.id ?? '';
     final pendingFriendReqs = _friendRequests.where((r) => r.toId == myId && !r.accepted).length;
-    return rtUnread + pendingFriendReqs + _pendingInvites.length + (_pendingVetoInvite != null ? 1 : 0);
+    return rtUnread + pendingFriendReqs + _pendingInvites.length + _pendingVetoInvites.length;
   }
 
   void markAllNotificationsRead() {
@@ -765,19 +947,42 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     if (_selectedGenre == genre) {
       _selectedGenre = null;
       _genreResults = [];
+      _genrePageToken = null;
       notifyListeners();
       return;
     }
     _selectedGenre = genre;
     _genreLoading = true;
+    _genrePageToken = null;
     notifyListeners();
     try {
-      final (movies, _) = await _imdb.fetchByGenre(genre);
+      final (movies, nextToken) = await _imdb.fetchByGenre(genre);
       _genreResults = movies;
+      _genrePageToken = nextToken;
     } catch (_) {
       _genreResults = [];
+      _genrePageToken = null;
     } finally {
       _genreLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> loadMoreGenreResults() async {
+    if (_genrePageToken == null || _genreLoadingMore || _selectedGenre == null) return;
+    _genreLoadingMore = true;
+    notifyListeners();
+    try {
+      final (movies, nextToken) = await _imdb.fetchByGenre(
+        _selectedGenre!,
+        pageToken: _genrePageToken,
+      );
+      _genreResults = [..._genreResults, ...movies];
+      _genrePageToken = nextToken;
+    } catch (_) {
+      // keep existing results on failure
+    } finally {
+      _genreLoadingMore = false;
       notifyListeners();
     }
   }
@@ -785,6 +990,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   void clearGenreSearch() {
     _selectedGenre = null;
     _genreResults = [];
+    _genrePageToken = null;
     notifyListeners();
   }
 
@@ -794,6 +1000,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     if (q.isNotEmpty && _selectedGenre != null) {
       _selectedGenre = null;
       _genreResults = [];
+      _genrePageToken = null;
     }
     if (q != _searchQuery) {
       _searchPageHistory..clear()..add(null);
@@ -1153,7 +1360,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         } catch (_) {}
       }
 
-      await ApiService.addMovie(
+      final serverData = await ApiService.addMovie(
         watchlistId: target.id,
         movieId: toSave.id,
         title: toSave.title,
@@ -1167,6 +1374,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         synopsis: toSave.synopsis,
         imageUrl: toSave.poster.imageUrl,
       );
+      // Sync local movie with backend's authoritative version — backend may have
+      // promoted section to 'watched' if the user already has this film in their
+      // watch history (single-member watchlist case).
+      final syncIdx = target.movies.indexWhere((m) => m.id == movie.id);
+      if (syncIdx != -1) {
+        target.movies[syncIdx] = _movieFromJson(serverData);
+        notifyListeners();
+      }
     }
   }
 
@@ -1262,30 +1477,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       movieId: movieId,
       memberId: memberId,
       stars: stars.round(),
-    );
-  }
-
-  void reactToMovie(String movieId, String memberId, ReactionType reaction) async {
-    final movies = activeWatchlist?.movies;
-    if (movies == null) return;
-    final idx = movies.indexWhere((m) => m.id == movieId);
-    if (idx == -1) return;
-    final wlId = activeWatchlist!.id;
-    movies[idx].reactions[memberId] = reaction;
-    _addActivity(ActivityEvent(
-      id: 'a${_activity.length + 1}',
-      kind: ActivityKind.reacted,
-      who: memberId,
-      movieId: movieId,
-      reaction: reaction,
-      at: DateTime.now(),
-    ));
-    notifyListeners();
-    await ApiService.patchMovie(
-      watchlistId: wlId,
-      movieId: movieId,
-      memberId: memberId,
-      reaction: reaction.name,
     );
   }
 
@@ -1398,6 +1589,15 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _friendRequests.clear();
     _memberProfiles.clear();
     _pendingInvites.clear();
+    _dismissedInviteBannerIds.clear();
+    _dismissedFriendRequestBannerIds.clear();
+    _pendingVetoInvites.clear();
+    _pendingSeanceBanner = null;
+    _dismissedSeanceBanner = null;
+    _availableSeances.clear();
+    _activeActivityBanner = null;
+    _activityBannerTimer?.cancel();
+    _activityBannerTimer = null;
     _notifications.clear();
     _myWatchedMovies.clear();
     _watchedMovieIds.clear();
@@ -1481,6 +1681,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _scheduleTokenRefresh(stored.refreshToken);
     notifyListeners();
     await _loadWatchlists();
+    unawaited(refreshAvailableSeances());
+    unawaited(refreshVetoInvites());
     await _loadFriendRequests();
     await _loadFriends();
     await loadFollowing();
@@ -1536,6 +1738,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final trimmed = displayName?.trim();
     if (trimmed != null && trimmed.isNotEmpty) {
       _currentUser!.displayName = trimmed;
+      for (final r in _reviews) {
+        if (r.byId == _currentUser!.id) r.byName = trimmed;
+      }
     }
     String? cloudAvatarUrl;
     if (avatarFilePath != null) {
@@ -1721,17 +1926,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         final e = event.data['event'] as Map<String, dynamic>;
         final whoId = e['who'] as String? ?? '';
         if (whoId == _currentUser?.id) break; // already added locally
-        ReactionType? parsedReaction;
-        try {
-          if (e['reaction'] != null) parsedReaction = ReactionType.values.byName(e['reaction'] as String);
-        } catch (_) {}
+        if ((e['kind'] as String?) == 'reacted') break;
         _activity.insert(0, ActivityEvent(
           kind: ActivityKind.values.byName(e['kind'] as String),
           who: whoId,
           movieId: e['movieId'] as String?,
           text: e['text'] as String?,
           to: e['to'] as String?,
-          reaction: parsedReaction,
           stars: (e['stars'] as num?)?.toDouble(),
           at: DateTime.tryParse(e['at'] as String? ?? '') ?? DateTime.now(),
         ));
@@ -1750,12 +1951,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       for (final wl in _watchlists) {
         final data = await ApiService.fetchWatchlistActivity(wl.id);
         for (final e in data) {
-          ReactionType? reaction;
-          try {
-            if (e['reaction'] != null) {
-              reaction = ReactionType.values.byName(e['reaction'] as String);
-            }
-          } catch (_) {}
+          if ((e['kind'] as String?) == 'reacted') continue;
           ActivityKind kind;
           try {
             kind = ActivityKind.values.byName(
@@ -1770,7 +1966,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
             movieId: e['movieId'] as String?,
             text: e['text'] as String?,
             to: e['to'] as String?,
-            reaction: reaction,
             stars: (e['stars'] as num?)?.toDouble(),
             at: DateTime.tryParse(e['at']?.toString() ?? '') ?? DateTime.now(),
           ));
@@ -1924,7 +2119,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
               runtime: m.runtime, rating: m.rating, genres: m.genres,
               director: m.director, streamId: m.streamId, addedBy: m.addedBy,
               section: m.section, synopsis: m.synopsis,
-              reactions: Map.from(m.reactions),
               stars: Map.from(m.stars),
               notes: List.from(m.notes),
               poster: fetched.poster,
@@ -1948,12 +2142,16 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final type = msg['type'] as String?;
     if (type == 'veto_invite') {
       if (msg['fromId'] != _currentUser?.id) {
-        _pendingVetoInvite = VetoInvite(
+        final wlId = msg['watchlistId'] as String? ?? '';
+        final invite = VetoInvite(
           fromId: msg['fromId'] as String? ?? '',
           fromName: msg['fromName'] as String? ?? 'Someone',
-          watchlistId: msg['watchlistId'] as String? ?? '',
+          watchlistId: wlId,
           watchlistName: msg['watchlistName'] as String? ?? 'Watchlist',
         );
+        // Replace any existing invite for this watchlist (e.g. host re-created lobby).
+        _pendingVetoInvites.removeWhere((i) => i.watchlistId == wlId);
+        _pendingVetoInvites.add(invite);
         notifyListeners();
       }
     } else if (type == 'watchlist_invite') {
@@ -1971,8 +2169,26 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         ));
         notifyListeners();
       }
+    } else if (type == 'friend_request') {
+      final requestId = msg['requestId'] as String?;
+      final fromId = msg['fromId'] as String?;
+      if (requestId != null &&
+          fromId != null &&
+          fromId != _currentUser?.id &&
+          !_friendRequests.any((r) => r.id == requestId)) {
+        _friendRequests.add(FriendRequest(
+          id: requestId,
+          fromId: fromId,
+          toId: _currentUser?.id ?? '',
+          sentAt: DateTime.now(),
+          fromUsername: msg['fromHandle'] as String?,
+          fromDisplayName: msg['fromName'] as String?,
+          fromAvatarUrl: msg['fromAvatarUrl'] as String?,
+        ));
+        notifyListeners();
+      }
     } else if (type == 'like_review') {
-      _notifications.insert(0, AppNotification(
+      final notif = AppNotification(
         id: 'notif_${DateTime.now().millisecondsSinceEpoch}',
         type: NotifType.likedReview,
         at: DateTime.now(),
@@ -1982,10 +2198,12 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         fromAvatarUrl: msg['fromAvatarUrl'] as String?,
         reviewId: msg['reviewId'] as String?,
         movieTitle: msg['movieTitle'] as String?,
-      ));
+      );
+      _notifications.insert(0, notif);
+      _showActivityBanner(notif);
       notifyListeners();
     } else if (type == 'like_watchlist') {
-      _notifications.insert(0, AppNotification(
+      final notif = AppNotification(
         id: 'notif_${DateTime.now().millisecondsSinceEpoch}',
         type: NotifType.likedWatchlist,
         at: DateTime.now(),
@@ -1995,10 +2213,12 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         fromAvatarUrl: msg['fromAvatarUrl'] as String?,
         watchlistId: msg['watchlistId'] as String?,
         watchlistName: msg['watchlistName'] as String?,
-      ));
+      );
+      _notifications.insert(0, notif);
+      _showActivityBanner(notif);
       notifyListeners();
     } else if (type == 'follow') {
-      _notifications.insert(0, AppNotification(
+      final notif = AppNotification(
         id: 'notif_${DateTime.now().millisecondsSinceEpoch}',
         type: NotifType.followed,
         at: DateTime.now(),
@@ -2006,8 +2226,37 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         fromName: msg['fromName'] as String?,
         fromHandle: msg['fromHandle'] as String?,
         fromAvatarUrl: msg['fromAvatarUrl'] as String?,
-      ));
+      );
+      _notifications.insert(0, notif);
+      _showActivityBanner(notif);
       notifyListeners();
+    } else if (type == 'seance_started') {
+      final watchlistId = msg['watchlistId'] as String?;
+      if (watchlistId != null && msg['hostId'] != _currentUser?.id) {
+        final session = SeanceSession.fromJson(msg);
+        _pendingSeanceBanner = session;
+        _availableSeances.removeWhere((s) => s.watchlistId == watchlistId);
+        _availableSeances.add(session);
+        notifyListeners();
+      }
+    } else if (type == 'seance_ended') {
+      final watchlistId = msg['watchlistId'] as String?;
+      if (_pendingSeanceBanner?.watchlistId == watchlistId) {
+        _pendingSeanceBanner = null;
+        notifyListeners();
+      }
+      if (_dismissedSeanceBanner?.watchlistId == watchlistId) {
+        _dismissedSeanceBanner = null;
+        notifyListeners();
+      }
+      if (_pendingSeanceAccept?.watchlistId == watchlistId) {
+        _pendingSeanceAccept = null;
+        notifyListeners();
+      }
+      if (watchlistId != null) {
+        _availableSeances.removeWhere((s) => s.watchlistId == watchlistId);
+        notifyListeners();
+      }
     } else if (type == 'friend_review') {
       _activity.insert(0, ActivityEvent(
         kind: ActivityKind.postedReview,

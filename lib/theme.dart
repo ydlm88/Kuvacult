@@ -32,32 +32,32 @@ class MT {
           onSurface: MC.ink,
         ),
         textTheme: TextTheme(
-          displayLarge: GoogleFonts.playfairDisplay(
+          displayLarge: GoogleFonts.newsreader(
             color: MC.ink,
-            fontWeight: FontWeight.w700,
+            fontWeight: FontWeight.w400,
             fontSize: 40,
-            letterSpacing: -1.2,
+            letterSpacing: -0.5,
             height: 1.0,
           ),
-          displayMedium: GoogleFonts.playfairDisplay(
+          displayMedium: GoogleFonts.newsreader(
             color: MC.ink,
-            fontWeight: FontWeight.w700,
+            fontWeight: FontWeight.w400,
             fontSize: 34,
-            letterSpacing: -1.0,
+            letterSpacing: -0.5,
             height: 1.0,
           ),
-          displaySmall: GoogleFonts.playfairDisplay(
+          displaySmall: GoogleFonts.newsreader(
             color: MC.ink,
-            fontWeight: FontWeight.w700,
+            fontWeight: FontWeight.w400,
             fontSize: 26,
-            letterSpacing: -0.5,
+            letterSpacing: -0.3,
             height: 1.0,
           ),
-          headlineMedium: GoogleFonts.playfairDisplay(
+          headlineMedium: GoogleFonts.newsreader(
             color: MC.ink,
-            fontWeight: FontWeight.w700,
+            fontWeight: FontWeight.w400,
             fontSize: 22,
-            letterSpacing: -0.5,
+            letterSpacing: -0.3,
           ),
           titleLarge: const TextStyle(
             color: MC.ink,
@@ -79,8 +79,8 @@ class MT {
             color: MC.mute,
             fontSize: 12,
           ),
-          labelSmall: const TextStyle(
-            fontFamily: 'monospace',
+          labelSmall: TextStyle(
+            fontFamily: GoogleFonts.martianMono().fontFamily,
             color: MC.dim,
             fontSize: 10,
             letterSpacing: 2.0,
@@ -89,16 +89,16 @@ class MT {
         useMaterial3: true,
       );
 
-  // Playfair Display helper
+  // Instrument Serif display helper
   static TextStyle display({
     double size = 34,
     Color? color,
     bool italic = false,
-    double letterSpacing = -1.0,
-    FontWeight weight = FontWeight.w700,
+    double letterSpacing = -0.5,
+    FontWeight weight = FontWeight.w400,
     double? height,
   }) =>
-      GoogleFonts.playfairDisplay(
+      GoogleFonts.newsreader(
         fontSize: size,
         color: color ?? MC.ink,
         fontStyle: italic ? FontStyle.italic : FontStyle.normal,
@@ -115,7 +115,7 @@ class MT {
     FontWeight weight = FontWeight.normal,
   }) =>
       TextStyle(
-        fontFamily: 'monospace',
+        fontFamily: GoogleFonts.martianMono().fontFamily,
         fontSize: size,
         color: color ?? MC.dim,
         letterSpacing: letterSpacing,

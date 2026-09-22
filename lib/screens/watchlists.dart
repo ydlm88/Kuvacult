@@ -11,6 +11,7 @@ import '../widgets/avatar.dart';
 import '../widgets/copy_button.dart';
 import '../widgets/sign_in_sheet.dart';
 import 'watchlist.dart';
+import '../utils/top_toast.dart';
 
 class WatchlistsScreen extends StatefulWidget {
   const WatchlistsScreen({super.key});
@@ -1012,16 +1013,7 @@ class _InviteSheetState extends State<_InviteSheet> {
       _searchResults.removeWhere((u) => u.id == user.id);
       _searchCtrl.clear();
     });
-    ScaffoldMessenger.of(widget.parentContext).showSnackBar(
-      SnackBar(
-        content: Text('Invite sent to ${user.displayName}',
-            style: const TextStyle(color: MC.ink, fontSize: 13)),
-        backgroundColor: MC.bg1,
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-    );
+    showTopToast(widget.parentContext, 'Invite sent to ${user.displayName}');
   }
 
   @override

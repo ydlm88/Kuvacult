@@ -2,16 +2,33 @@ const express = require('express');
 const Database = require('better-sqlite3');
 const path = require('path');
 const { query: pgQuery } = require('../db');
+const { cachePosterBackground, isLocalPosterUrl } = require('../services/posterService');
 
 const router = express.Router();
 
-const IMDB_BASE = 'https://api.imdbapi.dev';
+const {
+    searchTmdb,
+    fetchTmdbByImdbId,
+    enrichTmdbStubs,
+    fetchTmdbTrending,
+    fetchTmdbGenre,
+    fetchTmdbPopular,
+    stripTmdbId,
+    TMDB_GENRE_IDS,
+} = require('../services/tmdbService');
+
 const OMDB_BASE = 'https://www.omdbapi.com';
 const OMDB_POSTER_BASE = 'https://img.omdbapi.com';
 
 function omdbPosterUrl(imdbId) {
     if (!imdbId) return null;
     return `${OMDB_POSTER_BASE}/?i=${imdbId}&apikey=${process.env.OMDB_API_KEY}`;
+}
+
+function isAdultContent(m) {
+    return (m.genres || []).some(
+        (g) => typeof g === 'string' && g.toLowerCase() === 'adult'
+    );
 }
 
 //SQLite cache
@@ -29,6 +46,14 @@ db.exec(`
     cached_at  INTEGER NOT NULL
   );
 `);
+// Remove adult content from SQLite — runs every startup, instant no-op once clean
+db.exec(`
+    DELETE FROM movies WHERE id IN (
+        SELECT m.id FROM movies m, json_each(json_extract(m.raw_json, '$.genres')) g
+        WHERE lower(g.value) = 'adult'
+    );
+    DELETE FROM searches;
+`);
 const stmts = {
     saveMovie: db.prepare(
         'INSERT OR REPLACE INTO movies   (id, title, raw_json, cached_at) VALUES (?, ?, ?, ?)'
@@ -41,14 +66,6 @@ const stmts = {
     fuzzySearch: db.prepare('SELECT raw_json FROM movies   WHERE title LIKE ? LIMIT 20'),
 };
 
-async function imdbJson(urlPath) {
-    const r = await fetch(`${IMDB_BASE}${urlPath}`, { signal: AbortSignal.timeout(10000) });
-    if (r.status === 429) throw new Error('imdb_rate_limited');
-    if (!r.ok) throw new Error(`imdb_${r.status}`);
-    const data = await r.json();
-    if (data.code) throw new Error(data.message || 'imdb_api_error');
-    return data;
-}
 
 async function omdbJson(params) {
     const url = new URL(OMDB_BASE);
@@ -138,6 +155,7 @@ function cacheTitles(titles) {
 // Upsert one movie into media. Preserves any existing non-empty field values
 // so stubs can't overwrite richer data already in the catalog.
 async function pgSaveMovie(m, hasDetails = true) {
+    if (isAdultContent(m)) return;
     const id = m.id;
     const title = m.primaryTitle || m.title || '';
     if (!id || !title) return;
@@ -163,12 +181,20 @@ async function pgSaveMovie(m, hasDetails = true) {
        genres      = CASE WHEN EXCLUDED.genres  != '[]'::jsonb THEN EXCLUDED.genres   ELSE media.genres   END,
        director    = CASE WHEN EXCLUDED.director != ''          THEN EXCLUDED.director ELSE media.director END,
        synopsis    = CASE WHEN EXCLUDED.synopsis != ''          THEN EXCLUDED.synopsis ELSE media.synopsis END,
-       poster_url  = COALESCE(EXCLUDED.poster_url, media.poster_url),
+       poster_url  = CASE
+                       WHEN media.poster_url LIKE '%/posters/tt%' THEN media.poster_url
+                       ELSE COALESCE(EXCLUDED.poster_url, media.poster_url)
+                     END,
        media_type  = EXCLUDED.media_type,
        has_details = EXCLUDED.has_details OR media.has_details,
        updated_at  = NOW()`,
         [id, title, year, runtime, rating, genres, director, synopsis, posterUrl, mediaType, hasDetails]
     );
+
+    // Background poster download — fire and forget
+    if (posterUrl && !isLocalPosterUrl(posterUrl)) {
+        cachePosterBackground(id, posterUrl, pgQuery);
+    }
 }
 
 async function pgSaveMovies(list, hasDetails = true) {
@@ -196,23 +222,6 @@ async function pgGetMovie(id) {
     return r.rows[0] ? pgRowToImdb(r.rows[0]) : null;
 }
 
-// Single round-trip to fetch detail-level data for multiple IDs. imdbapi.dev search
-// results are stubs, so this gives us a second shot at plot/director before falling
-// back to OMDB. Handles all known response shapes defensively.
-async function imdbBatchGet(ids) {
-    if (!ids.length) return [];
-    try {
-        const data = await imdbJson(`/titles/batchGet?ids=${ids.join(',')}`);
-        if (Array.isArray(data)) return data;
-        if (Array.isArray(data.titles)) return data.titles;
-        // Some batch APIs return an object keyed by ID: { tt123: {…}, tt456: {…} }
-        const vals = Object.values(data);
-        if (vals.length && typeof vals[0] === 'object' && vals[0] !== null) return vals;
-        return [];
-    } catch (_) {
-        return []; // endpoint absent or rate-limited — fall through to OMDB
-    }
-}
 
 const OMDB_INLINE_LIMIT = 8;
 
@@ -258,41 +267,6 @@ async function enrichResultsInline(titles) {
         .map((t, i) => ({ t, i }))
         .filter(({ t }) => !t.plot || !t.directors?.length);
 
-    if (afterPg.length) {
-        const batchIds = afterPg.map(({ t }) => t.id).filter(Boolean);
-        const batchResults = await imdbBatchGet(batchIds);
-
-        if (batchResults.length) {
-            const batchMap = {};
-            for (const r of batchResults) {
-                const id = r.id || r.imdbID;
-                if (id) batchMap[id] = r;
-            }
-
-            const batchSaved = [];
-            afterPg.forEach(({ t, i }) => {
-                const full = batchMap[t.id];
-                if (!full) return;
-                list[i] = {
-                    ...t,
-                    directors: mergeField(t.directors, full.directors),
-                    plot: mergeField(t.plot, full.plot),
-                    runtimeSeconds: mergeField(t.runtimeSeconds, full.runtimeSeconds),
-                    rating: mergeField(t.rating, full.rating),
-                    genres: mergeField(t.genres, full.genres),
-                    primaryImage: mergeField(t.primaryImage, full.primaryImage)
-                        ?? (t.id ? { url: omdbPosterUrl(t.id) } : null),
-                };
-                if (full.plot || full.directors?.length) batchSaved.push(full);
-            });
-
-            if (batchSaved.length) {
-                cacheTitles(batchSaved);
-                pgSaveMovies(batchSaved, true).catch(() => {});
-            }
-        }
-    }
-
     const needOmdb = list
         .map((t, i) => ({ t, i }))
         .filter(({ t }) => !t.plot || !t.directors?.length)
@@ -307,6 +281,7 @@ async function enrichResultsInline(titles) {
     const omdbSaved = [];
     omdbResults.forEach((result, n) => {
         if (result.status !== 'fulfilled' || !result.value?.id) return;
+        if (isAdultContent(result.value)) return;
         const full = result.value;
         const { i } = needOmdb[n];
         const t = list[i];
@@ -339,7 +314,7 @@ async function enrichStubs(ids) {
 
             let full = null;
             try {
-                const data = await imdbJson(`/titles/${id}`);
+                const data = await fetchTmdbByImdbId(id);
                 stmts.saveMovie.run(id, data.primaryTitle || '', JSON.stringify(data), Date.now());
                 full = data;
             } catch (_) {
@@ -373,12 +348,15 @@ router.get('/search', async (req, res) => {
     let nextToken = null;
 
     try {
-        let urlPath = `/search/titles?query=${encodeURIComponent(q)}`;
-        if (pageToken) urlPath += `&pageToken=${encodeURIComponent(pageToken)}`;
-        const data = await imdbJson(urlPath);
-        if ((data.titles || []).length) {
-            titles = data.titles;
-            nextToken = data.nextPageToken || null;
+        const tmdbPage = parseInt(pageToken) || 1;
+        const data = await searchTmdb(q, tmdbPage);
+        if (data.titles.length) {
+            const enriched = await enrichTmdbStubs(data.titles);
+            const valid = enriched.filter((m) => m.id).map(stripTmdbId);
+            if (valid.length) {
+                titles = valid;
+                nextToken = data.nextPageToken;
+            }
         }
     } catch (_) {}
 
@@ -422,15 +400,21 @@ router.get('/search', async (req, res) => {
 });
 
 // GET /movies/trending
-// Fallback chain: IMDb -> SQLite cache -> PG catalog
+// Fallback chain: TMDB -> SQLite cache -> PG catalog
 router.get('/trending', async (req, res) => {
     try {
-        const data = await imdbJson('/titles?titleType=movie&sort=POPULARITY&order=DESC');
-        const titles = data.titles || [];
-        cacheTitles(titles);
-        stmts.saveSearch.run('trending', JSON.stringify(data), Date.now());
-        pgSaveMovies(titles, true).catch(() => {});
-        return res.json(data);
+        const data = await fetchTmdbTrending(1);
+        const enriched = (await enrichTmdbStubs(data.titles)).filter((m) => m.id).map(stripTmdbId);
+        if (enriched.length) {
+            cacheTitles(enriched);
+            stmts.saveSearch.run(
+                'trending',
+                JSON.stringify({ titles: enriched, nextPageToken: data.nextPageToken }),
+                Date.now()
+            );
+            pgSaveMovies(enriched, true).catch(() => {});
+            return res.json({ titles: enriched, nextPageToken: data.nextPageToken });
+        }
     } catch (_) {}
 
     const hit = stmts.getSearch.get('trending');
@@ -449,21 +433,27 @@ router.get('/trending', async (req, res) => {
 });
 
 // GET /movies/genre?g=genre[&pageToken=...]
-// Fallback chain: IMDb -> SQLite cache -> PG catalog
+// Fallback chain: TMDB -> SQLite cache -> PG catalog
 router.get('/genre', async (req, res) => {
     const genre = (req.query.g || '').trim();
     const pageToken = req.query.pageToken;
     const cacheKey = `genre:${genre.toLowerCase()}`;
 
     try {
-        let urlPath = `/titles?titleType=movie&genres=${encodeURIComponent(genre)}&sort=POPULARITY&order=DESC`;
-        if (pageToken) urlPath += `&pageToken=${encodeURIComponent(pageToken)}`;
-        const data = await imdbJson(urlPath);
-        const titles = data.titles || [];
-        cacheTitles(titles);
-        if (!pageToken) stmts.saveSearch.run(cacheKey, JSON.stringify(data), Date.now());
-        pgSaveMovies(titles, true).catch(() => {});
-        return res.json(data);
+        const tmdbPage = parseInt(pageToken) || 1;
+        const data = await fetchTmdbGenre(genre, tmdbPage);
+        const enriched = (await enrichTmdbStubs(data.titles)).filter((m) => m.id).map(stripTmdbId);
+        if (enriched.length) {
+            cacheTitles(enriched);
+            if (!pageToken)
+                stmts.saveSearch.run(
+                    cacheKey,
+                    JSON.stringify({ titles: enriched, nextPageToken: data.nextPageToken }),
+                    Date.now()
+                );
+            pgSaveMovies(enriched, true).catch(() => {});
+            return res.json({ titles: enriched, nextPageToken: data.nextPageToken });
+        }
     } catch (_) {}
 
     const hit = stmts.getSearch.get(cacheKey);
@@ -589,44 +579,103 @@ router.delete('/catalog/:id', async (req, res) => {
     }
 });
 
-const OMDB_SCAN_BATCH = 100000;
-const OMDB_SCAN_CONCURRENCY = 15;
+const TMDB_POPULAR_PAGES = 50;
+const TMDB_GENRE_PAGES   = 10;
 
 // In-memory job state, survives as long as the server process is running.
-let _pullJob = null; // { status: 'running'|'done'|'error', stats: {}, error: null }
+let _pullJob   = null; // { status: 'running'|'done'|'error', stats: {}, error: null }
+let _enrichJob = null;
+
+// OMDB genre search terms — mirror TMDB genres for consistent coverage.
+const OMDB_DISCOVERY_TERMS = [
+    'Action', 'Comedy', 'Drama', 'Thriller', 'Horror', 'Romance',
+    'Documentary', 'Animation', 'Adventure', 'Crime', 'Fantasy',
+    'Mystery', 'War', 'Western', 'History', 'Music', 'Family',
+];
+
+// Searches OMDB for movies and series not already in the media catalog.
+// Bails immediately if OMDB rate-limits. Episodes are explicitly rejected.
+async function runOmdbDiscovery(stats, sleep) {
+    const TYPES = ['movie', 'series'];
+    const PAGES_PER_TERM = 3; // up to 30 results per term/type
+    const DETAIL_BATCH = 10;
+    const seenIds = new Set();
+    let rateLimited = false;
+
+    for (const type of TYPES) {
+        if (rateLimited) break;
+        for (const term of OMDB_DISCOVERY_TERMS) {
+            if (rateLimited) break;
+            for (let page = 1; page <= PAGES_PER_TERM; page++) {
+                if (rateLimited) break;
+                try {
+                    const raw = await omdbJson({ s: term, type, page: String(page) });
+                    const items = (raw.Search || []).filter(
+                        (o) => (o.Type === 'movie' || o.Type === 'series') &&
+                               o.imdbID && !seenIds.has(o.imdbID)
+                    );
+                    if (!items.length) break;
+
+                    const ids = items.map((o) => o.imdbID);
+                    const existingR = await pgQuery('SELECT id FROM media WHERE id = ANY($1)', [ids]);
+                    const existingIds = new Set(existingR.rows.map((r) => r.id));
+                    const newItems = items.filter((o) => !existingIds.has(o.imdbID));
+                    for (const o of newItems) seenIds.add(o.imdbID);
+
+                    for (let i = 0; i < newItems.length; i += DETAIL_BATCH) {
+                        if (rateLimited) break;
+                        await Promise.allSettled(
+                            newItems.slice(i, i + DETAIL_BATCH).map(async (o) => {
+                                if (rateLimited) return;
+                                try {
+                                    const detail = await omdbJson({ i: o.imdbID, plot: 'full' });
+                                    if (detail.Type === 'episode') return;
+                                    const full = omdbToImdb(detail);
+                                    if (isAdultContent(full)) return;
+                                    if (!full.primaryImage?.url) full.primaryImage = { url: omdbPosterUrl(o.imdbID) };
+                                    cacheTitles([full]);
+                                    await pgSaveMovie(full, true);
+                                    stats.omdbDiscovered++;
+                                } catch (e) {
+                                    const msg = e.message || '';
+                                    if (msg.includes('rate_limit') || msg.startsWith('omdb_4')) {
+                                        rateLimited = true;
+                                        stats.omdbErrors.push(`discover ${o.imdbID}: ${msg}`);
+                                    }
+                                }
+                            })
+                        );
+                        await sleep(150);
+                    }
+
+                    const totalResults = parseInt(raw.totalResults) || 0;
+                    if (page * 10 >= totalResults) break;
+                    await sleep(200);
+                } catch (e) {
+                    const msg = e.message || '';
+                    if (msg.includes('rate_limit') || msg.startsWith('omdb_4')) {
+                        rateLimited = true;
+                        stats.omdbErrors.push(`search ${type}/${term} p${page}: ${msg}`);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
 
 async function runBulkPull() {
-    const genres = [
-        'Action',
-        'Drama',
-        'Thriller',
-        'Comedy',
-        'Horror',
-        'Romance',
-        'Animation',
-        'Crime',
-        'Adventure',
-        'Science-Fiction',
-        'Documentary',
-        'Biography',
-        'Fantasy',
-        'Mystery',
-        'History',
-        'War',
-        'Sport',
-        'Western',
-        'Family',
-        'Music',
-    ];
+    // Unique genre names only — no aliases
+    const genres = Object.keys(TMDB_GENRE_IDS).filter((k) => k !== 'Science-Fiction');
 
     const stats = {
-        imdbTrending: 0,
-        imdbGenre: 0,
-        imdbAdded: 0,
-        imdbErrors: [],
+        tmdbPopular: 0,
+        tmdbGenre: 0,
+        tmdbAdded: 0,
+        tmdbErrors: [],
+        omdbDiscovered: 0,
         omdbById: 0,
         omdbErrors: [],
-        scanRange: '',
         totalBefore: 0,
         totalAfter: 0,
     };
@@ -636,126 +685,78 @@ async function runBulkPull() {
         stats.totalBefore = parseInt(beforeR.rows[0].count);
 
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        let tmdbFailed = false;
 
-        let nextTrendToken = null;
-        for (let page = 0; page < 2; page++) {
+        // Phase 1: Popular movies sweep
+        for (let page = 1; page <= TMDB_POPULAR_PAGES; page++) {
             try {
-                let urlPath = '/titles?titleType=movie&sort=POPULARITY&order=DESC';
-                if (nextTrendToken) urlPath += `&pageToken=${encodeURIComponent(nextTrendToken)}`;
-                const data = await imdbJson(urlPath);
-                const titles = data.titles || [];
-                if (!titles.length) break;
-                cacheTitles(titles);
-                await pgSaveMovies(titles, true);
-                stats.imdbTrending += titles.length;
-                nextTrendToken = data.nextPageToken || null;
-                if (!nextTrendToken) break;
-                await sleep(350);
+                const data = await fetchTmdbPopular(page);
+                const valid = (await enrichTmdbStubs(data.titles))
+                    .filter((m) => m.id)
+                    .map(stripTmdbId);
+                if (valid.length) {
+                    cacheTitles(valid);
+                    await pgSaveMovies(valid, true);
+                    stats.tmdbPopular += valid.length;
+                    stats.tmdbAdded  += valid.length;
+                }
+                if (!data.nextPageToken) break;
+                await sleep(100);
             } catch (e) {
-                stats.imdbErrors.push(`trending p${page + 1}: ${e.message}`);
+                stats.tmdbErrors.push(`popular p${page}: ${e.message}`);
+                tmdbFailed = true;
                 break;
             }
         }
 
-        const failedGenres = new Set();
+        // Phase 2: Genre sweeps
         for (const genre of genres) {
-            let nextGenreToken = null;
-            for (let page = 0; page < 2; page++) {
+            for (let page = 1; page <= TMDB_GENRE_PAGES; page++) {
                 try {
-                    let urlPath = `/titles?titleType=movie&genres=${encodeURIComponent(genre)}&sort=POPULARITY&order=DESC`;
-                    if (nextGenreToken)
-                        urlPath += `&pageToken=${encodeURIComponent(nextGenreToken)}`;
-                    const data = await imdbJson(urlPath);
-                    const titles = data.titles || [];
-                    if (!titles.length) break;
-                    cacheTitles(titles);
-                    await pgSaveMovies(titles, true);
-                    stats.imdbGenre += titles.length;
-                    nextGenreToken = data.nextPageToken || null;
-                    if (!nextGenreToken) break;
-                    await sleep(350);
+                    const data = await fetchTmdbGenre(genre, page);
+                    const valid = (await enrichTmdbStubs(data.titles))
+                        .filter((m) => m.id)
+                        .map(stripTmdbId);
+                    if (valid.length) {
+                        cacheTitles(valid);
+                        await pgSaveMovies(valid, true);
+                        stats.tmdbGenre += valid.length;
+                        stats.tmdbAdded += valid.length;
+                    }
+                    if (!data.nextPageToken) break;
+                    await sleep(100);
                 } catch (e) {
-                    stats.imdbErrors.push(`${genre} p${page + 1}: ${e.message}`);
-                    failedGenres.add(genre);
+                    stats.tmdbErrors.push(`${genre} p${page}: ${e.message}`);
+                    tmdbFailed = true;
                     break;
                 }
             }
         }
 
-        const imdbFailed = stats.imdbTrending === 0 && stats.imdbGenre === 0;
-
-        // Sequential IMDb ID scan — runs always so the catalog grows over time,
-        // and is the primary path when IMDb is unavailable.
-        {
-            await pgQuery(`
-                CREATE TABLE IF NOT EXISTS settings (
-                    key   TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                )
-            `);
-            await pgQuery(`
-                INSERT INTO settings (key, value) VALUES ('imdb_scan_pos', '0')
-                ON CONFLICT (key) DO NOTHING
-            `);
-
-            const posR = await pgQuery(`SELECT value FROM settings WHERE key = 'imdb_scan_pos'`);
-            const startPos = parseInt(posR.rows[0]?.value || '0') + 1;
-            const endPos   = startPos + OMDB_SCAN_BATCH - 1;
-
-            const existingR = await pgQuery('SELECT id FROM media');
-            const existingIds = new Set(existingR.rows.map((r) => r.id));
-
-            // Build the list of IDs to probe, skipping ones already in catalog
-            const toProbe = [];
-            for (let n = startPos; n <= endPos; n++) {
-                const imdbId = `tt${String(n).padStart(7, '0')}`;
-                if (!existingIds.has(imdbId)) toProbe.push(imdbId);
-            }
-
-            for (let i = 0; i < toProbe.length; i += OMDB_SCAN_CONCURRENCY) {
-                await Promise.allSettled(
-                    toProbe.slice(i, i + OMDB_SCAN_CONCURRENCY).map(async (imdbId) => {
-                        try {
-                            const raw = await omdbJson({ i: imdbId, plot: 'full' });
-                            if (!raw.Type || raw.Type === 'episode' || raw.Type === 'game') return;
-                            const full = omdbToImdb(raw);
-                            cacheTitles([full]);
-                            await pgSaveMovie(full, true);
-                            stats.omdbById++;
-                        } catch (e) {
-                            const msg = e.message || '';
-                            if (msg.startsWith('omdb_rate_limited') || msg.startsWith('omdb_4')) {
-                                stats.omdbErrors.push(`${imdbId}: ${msg}`);
-                            }
-                        }
-                    })
-                );
-                await sleep(200);
-            }
-
-            await pgQuery(
-                `INSERT INTO settings (key, value) VALUES ('imdb_scan_pos', $1)
-                 ON CONFLICT (key) DO UPDATE SET value = $1`,
-                [String(endPos)]
-            );
-            stats.scanRange = `tt${String(startPos).padStart(7, '0')} – tt${String(endPos).padStart(7, '0')}`;
+        // Phase 3: OMDB discovery fallback — only when TMDB was declined.
+        // Searches for movies and series not already in the catalog.
+        if (tmdbFailed) {
+            await runOmdbDiscovery(stats, sleep);
         }
 
+        // Phase 4: OMDB enrichment for stubs still missing synopsis or poster
         const needsEnrichR = await pgQuery(
             `SELECT id FROM media
-       WHERE NOT has_details OR director = '' OR synopsis = ''
-       ORDER BY updated_at DESC NULLS LAST
-       LIMIT 200`
+             WHERE synopsis = '' OR poster_url IS NULL
+             ORDER BY rating DESC NULLS LAST
+             LIMIT 500`
         );
         const enrichIds = needsEnrichR.rows.map((r) => r.id);
-        const BATCH = 10;
+        const BATCH = 15;
         for (let i = 0; i < enrichIds.length; i += BATCH) {
-            await Promise.all(
+            await Promise.allSettled(
                 enrichIds.slice(i, i + BATCH).map(async (id) => {
                     try {
                         const raw = await omdbJson({ i: id, plot: 'full' });
                         const full = omdbToImdb(raw);
-                        stmts.saveMovie.run(id, full.primaryTitle || '', JSON.stringify(full), Date.now());
+                        if (isAdultContent(full)) return;
+                        if (!full.primaryImage?.url) full.primaryImage = { url: omdbPosterUrl(id) };
+                        cacheTitles([full]);
                         await pgSaveMovie(full, true);
                         stats.omdbById++;
                     } catch (e) {
@@ -763,12 +764,13 @@ async function runBulkPull() {
                     }
                 })
             );
+            await sleep(200);
         }
 
         const finalR = await pgQuery('SELECT COUNT(*) FROM media');
         stats.totalAfter = parseInt(finalR.rows[0].count);
 
-        stats.imdbErrors = stats.imdbErrors.slice(0, 20);
+        stats.tmdbErrors = stats.tmdbErrors.slice(0, 20);
         stats.omdbErrors = stats.omdbErrors.slice(0, 20);
 
         return stats;
@@ -795,13 +797,83 @@ router.get('/bulk-pull/status', (req, res) => {
     res.json(_pullJob);
 });
 
+// Enrichment-only job: takes existing stubs and fills synopsis + poster via OMDB.
+// No ID scan, no trending/genre fetches — pure enrichment, rated titles first.
+// Mutates `stats` in place so the status endpoint can return live progress.
+async function runEnrichOnly(stats) {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    const beforeR = await pgQuery('SELECT COUNT(*)::int AS n FROM media WHERE has_details = TRUE');
+    stats.totalBefore = beforeR.rows[0].n;
+
+    const needsR = await pgQuery(
+        `SELECT id FROM media
+         WHERE synopsis = '' OR poster_url IS NULL
+         ORDER BY rating DESC NULLS LAST
+         LIMIT 3000`
+    );
+    const ids = needsR.rows.map((r) => r.id);
+
+    const BATCH = 15;
+    for (let i = 0; i < ids.length; i += BATCH) {
+        await Promise.allSettled(
+            ids.slice(i, i + BATCH).map(async (id) => {
+                try {
+                    const raw = await omdbJson({ i: id, plot: 'full' });
+                    const full = omdbToImdb(raw);
+                    if (isAdultContent(full)) return;
+                    if (!full.primaryImage?.url) full.primaryImage = { url: omdbPosterUrl(id) };
+                    cacheTitles([full]);
+                    await pgSaveMovie(full, true);
+                    stats.enriched++;
+                    stats.lastId = id;
+                    if (full.plot) stats.withSynopsis++;
+                    if (full.primaryImage?.url) stats.withPoster++;
+                } catch (e) {
+                    const msg = e.message || '';
+                    if (msg.includes('rate_limit') || msg.startsWith('omdb_4')) {
+                        stats.errors.push(`${id}: ${msg}`);
+                    } else {
+                        stats.notFound++;
+                    }
+                }
+            })
+        );
+        await sleep(200);
+    }
+
+    const afterR = await pgQuery('SELECT COUNT(*)::int AS n FROM media WHERE has_details = TRUE');
+    stats.totalAfter = afterR.rows[0].n;
+    stats.errors = stats.errors.slice(0, 20);
+    return stats;
+}
+
+// POST /movies/enrich-only — enrich stubs with OMDB (no scan, no API discovery).
+router.post('/enrich-only', (req, res) => {
+    if (_enrichJob?.status === 'running') {
+        return res.json({ status: 'running', stats: _enrichJob.stats });
+    }
+    const liveStats = { enriched: 0, withSynopsis: 0, withPoster: 0, notFound: 0, errors: [], totalBefore: 0, totalAfter: 0, lastId: null };
+    _enrichJob = { status: 'running', stats: liveStats, error: null };
+    runEnrichOnly(liveStats)
+        .then((stats) => { _enrichJob = { status: 'done', stats, error: null }; })
+        .catch((err)  => { _enrichJob = { status: 'error', stats: liveStats, error: err.message }; });
+    res.json({ status: 'started' });
+});
+
+// GET /movies/enrich-only/status
+router.get('/enrich-only/status', (req, res) => {
+    if (!_enrichJob) return res.json({ status: 'idle' });
+    res.json(_enrichJob);
+});
+
 // GET /movies/:id
-// Fallback chain: IMDb -> OMDB -> SQLite cache -> PG catalog
+// Fallback chain: TMDB -> OMDB -> SQLite cache -> PG catalog
 router.get('/:id', async (req, res) => {
     const { id } = req.params;
 
     try {
-        const data = await imdbJson(`/titles/${id}`);
+        const data = stripTmdbId(await fetchTmdbByImdbId(id));
         stmts.saveMovie.run(id, data.primaryTitle || '', JSON.stringify(data), Date.now());
         pgSaveMovie(data, true).catch(() => {});
         return res.json(data);

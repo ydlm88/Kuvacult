@@ -1,6 +1,7 @@
 // poster.dart — Movie poster widget that shows a network image or a styled typographic gradient fallback.
 import 'package:flutter/material.dart';
 import 'app_image.dart';
+import 'kuvacult_loader.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models.dart';
 
@@ -33,7 +34,17 @@ class PosterWidget extends StatelessWidget {
           fit: BoxFit.cover,
           fadeInDuration: const Duration(milliseconds: 250),
           fadeOutDuration: Duration.zero,
-          placeholder: (_, __) => _buildGradientPoster(context),
+          placeholder: (_, __) => Container(
+            width: width,
+            height: height,
+            color: const Color(0xFF0D0D0D),
+            child: Center(
+              child: Transform.scale(
+                scale: (width / 140).clamp(0.3, 1.0),
+                child: const KuvacultLoader(),
+              ),
+            ),
+          ),
           errorWidget: (_, __, ___) => _buildGradientPoster(context),
         ),
       );
@@ -96,7 +107,7 @@ class PosterWidget extends StatelessWidget {
                   m.title,
                   overflow: TextOverflow.clip,
                   maxLines: 3,
-                  style: GoogleFonts.playfairDisplay(
+                  style: GoogleFonts.newsreader(
                     fontStyle: FontStyle.italic,
                     fontWeight: FontWeight.w700,
                     fontSize: fontSize * 1.3,
@@ -111,7 +122,7 @@ class PosterWidget extends StatelessWidget {
                 overflow: TextOverflow.clip,
                 maxLines: 1,
                 style: TextStyle(
-                  fontFamily: 'monospace',
+                  fontFamily: GoogleFonts.martianMono().fontFamily,
                   fontSize: fontSize * 0.55,
                   color: accent.withAlpha(178),
                   letterSpacing: 1,
@@ -170,7 +181,7 @@ class PosterWidget extends StatelessWidget {
                 overflow: TextOverflow.clip,
                 maxLines: 1,
                 style: TextStyle(
-                  fontFamily: 'monospace',
+                  fontFamily: GoogleFonts.martianMono().fontFamily,
                   fontSize: fontSize * 0.5,
                   color: accent.withAlpha(204),
                 ),
@@ -210,7 +221,7 @@ class PosterWidget extends StatelessWidget {
                 m.title,
                 overflow: TextOverflow.clip,
                 maxLines: 3,
-                style: GoogleFonts.playfairDisplay(
+                style: GoogleFonts.newsreader(
                   fontSize: fontSize * 1.0,
                   color: accent,
                   height: 1.1,
@@ -252,7 +263,7 @@ class PosterWidget extends StatelessWidget {
                 m.title,
                 overflow: TextOverflow.clip,
                 maxLines: 3,
-                style: GoogleFonts.playfairDisplay(
+                style: GoogleFonts.newsreader(
                   fontStyle: FontStyle.italic,
                   fontSize: fontSize * 1.2,
                   color: accent,
@@ -265,7 +276,7 @@ class PosterWidget extends StatelessWidget {
                 overflow: TextOverflow.clip,
                 maxLines: 1,
                 style: TextStyle(
-                  fontFamily: 'monospace',
+                  fontFamily: GoogleFonts.martianMono().fontFamily,
                   fontSize: fontSize * 0.45,
                   color: accent.withAlpha(178),
                 ),
@@ -285,7 +296,7 @@ class PosterWidget extends StatelessWidget {
                 m.title,
                 overflow: TextOverflow.clip,
                 maxLines: 3,
-                style: GoogleFonts.playfairDisplay(
+                style: GoogleFonts.newsreader(
                   fontWeight: FontWeight.w700,
                   fontSize: fontSize * 1.1,
                   color: accent,
@@ -305,7 +316,7 @@ class PosterWidget extends StatelessWidget {
               textAlign: TextAlign.center,
               overflow: TextOverflow.clip,
               maxLines: 4,
-              style: GoogleFonts.playfairDisplay(
+              style: GoogleFonts.newsreader(
                 fontStyle: FontStyle.italic,
                 fontSize: fontSize * 1.3,
                 color: accent,
@@ -326,7 +337,7 @@ class PosterWidget extends StatelessWidget {
                 m.title,
                 overflow: TextOverflow.clip,
                 maxLines: 3,
-                style: GoogleFonts.playfairDisplay(
+                style: GoogleFonts.newsreader(
                   fontStyle: FontStyle.italic,
                   fontSize: fontSize * 1.4,
                   color: accent,

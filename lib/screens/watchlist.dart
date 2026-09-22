@@ -17,6 +17,7 @@ import '../widgets/tag.dart';
 import '../widgets/kuvacult_loader.dart';
 import 'detail.dart';
 import 'watchlists.dart';
+import '../utils/top_toast.dart';
 
 class WatchlistScreen extends StatefulWidget {
   const WatchlistScreen({super.key});
@@ -983,16 +984,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
         .where((m) => m.section == WatchSection.want)
         .toList();
     if (wantMovies.isEmpty) {
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(SnackBar(
-          content: const Text('No movies in Want to Watch',
-              style: TextStyle(color: MC.ink, fontSize: 13)),
-          backgroundColor: MC.bg1,
-          behavior: SnackBarBehavior.fixed,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          duration: const Duration(seconds: 2),
-        ));
+      showTopToast(context, 'No movies in Want to Watch');
       return;
     }
     final movie = wantMovies[Random().nextInt(wantMovies.length)];
@@ -1154,16 +1146,7 @@ class _InviteSheetInlineState extends State<_InviteSheetInline> {
       _searchResults.removeWhere((u) => u.id == user.id);
       _searchCtrl.clear();
     });
-    ScaffoldMessenger.of(widget.parentContext).showSnackBar(
-      SnackBar(
-        content: Text('Invite sent to ${user.displayName}',
-            style: const TextStyle(color: MC.ink, fontSize: 13)),
-        backgroundColor: MC.bg1,
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-    );
+    showTopToast(widget.parentContext, 'Invite sent to ${user.displayName}');
   }
 
   @override
@@ -1196,17 +1179,7 @@ class _InviteSheetInlineState extends State<_InviteSheetInline> {
           GestureDetector(
             onTap: () {
               Clipboard.setData(ClipboardData(text: watchlist.listKey));
-              ScaffoldMessenger.of(widget.parentContext).showSnackBar(
-                SnackBar(
-                  content: const Text('Code copied',
-                      style: TextStyle(color: MC.ink, fontSize: 13)),
-                  backgroundColor: MC.bg1,
-                  behavior: SnackBarBehavior.floating,
-                  margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-              );
+              showTopToast(widget.parentContext, 'Code copied');
             },
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),

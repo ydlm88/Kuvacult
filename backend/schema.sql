@@ -96,7 +96,6 @@ CREATE TABLE IF NOT EXISTS movies (
   synopsis     TEXT NOT NULL DEFAULT '',
   image_url    TEXT,
   stars        JSONB NOT NULL DEFAULT '{}',
-  reactions    JSONB NOT NULL DEFAULT '{}',
   notes        JSONB NOT NULL DEFAULT '[]',
   added_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (id, watchlist_id)
@@ -119,7 +118,6 @@ CREATE TABLE IF NOT EXISTS activity (
   kind         TEXT NOT NULL,
   who          TEXT NOT NULL,
   movie_id     TEXT,
-  reaction     TEXT,
   stars        REAL,
   to_section   TEXT,
   picks        JSONB,
@@ -259,3 +257,22 @@ BEGIN
     ALTER INDEX IF EXISTS idx_catalog_stubs      RENAME TO idx_media_stubs;
   END IF;
 END $$;
+
+-- One-time cleanup: remove pornographic content from catalog
+-- Instant no-op on subsequent runs once rows are deleted
+DELETE FROM media
+WHERE EXISTS (
+    SELECT 1 FROM jsonb_array_elements_text(genres) g
+    WHERE lower(g) = 'adult'
+);
+
+
+-- Séance: one active session per watchlist
+CREATE TABLE IF NOT EXISTS seance_sessions (
+  watchlist_id   TEXT PRIMARY KEY REFERENCES watchlists(id) ON DELETE CASCADE,
+  host_id        TEXT NOT NULL,
+  host_name      TEXT NOT NULL DEFAULT '',
+  host_avatar_url TEXT,
+  livekit_room   TEXT NOT NULL,
+  started_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

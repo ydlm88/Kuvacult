@@ -314,13 +314,11 @@ class ApiService {
     String? section,
     String? memberId,
     int? stars,
-    String? reaction,
   }) async {
     final body = <String, dynamic>{};
     if (section   != null) body['section']   = section;
     if (memberId  != null) body['memberId']  = memberId;
     if (stars     != null) body['stars']     = stars;
-    if (reaction  != null) body['reaction']  = reaction;
     final res = await _patch(
       Uri.parse('$_base/watchlists/$watchlistId/movies/$movieId'),
       headers: _json(),
@@ -568,6 +566,7 @@ class ApiService {
     final res = await _post(
       Uri.parse('$_base/reviews'),
       headers: _json(),
+      timeout: const Duration(seconds: 30),
       body: jsonEncode({
         'byId': byId,
         'movieId': movieId,
@@ -836,6 +835,68 @@ class ApiService {
       body: jsonEncode({'text': text, 'userId': userId}),
     );
     _decode(res);
+  }
+
+  // ── Séance ────────────────────────────────────────────────────────────────
+
+  static Future<Map<String, dynamic>> startSeance(String watchlistId) async {
+    final res = await _post(
+      Uri.parse('$_base/seance/start'),
+      headers: _json(),
+      body: jsonEncode({'watchlistId': watchlistId}),
+    );
+    return _decode(res);
+  }
+
+  static Future<Map<String, dynamic>> joinSeance(String watchlistId) async {
+    final res = await _post(
+      Uri.parse('$_base/seance/join'),
+      headers: _json(),
+      body: jsonEncode({'watchlistId': watchlistId}),
+    );
+    return _decode(res);
+  }
+
+  static Future<void> endSeance(String watchlistId) async {
+    final res = await _delete(
+      Uri.parse('$_base/seance/${Uri.encodeComponent(watchlistId)}'),
+      headers: _auth(),
+    );
+    _decode(res);
+  }
+
+  static Future<Map<String, dynamic>> fetchSeanceSession(String watchlistId) async {
+    final res = await _get(
+      Uri.parse('$_base/seance/${Uri.encodeComponent(watchlistId)}'),
+      headers: _auth(),
+    );
+    return _decode(res);
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchActiveSeances() async {
+    final res = await _get(
+      Uri.parse('$_base/seance/active'),
+      headers: _auth(),
+    );
+    final body = _decode(res);
+    return (body['sessions'] as List? ?? []).cast<Map<String, dynamic>>();
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchActiveVetoLobbies() async {
+    final res = await _get(
+      Uri.parse('$_base/watchlists/veto-lobbies'),
+      headers: _auth(),
+    );
+    final body = _decode(res);
+    return (body['lobbies'] as List? ?? []).cast<Map<String, dynamic>>();
+  }
+
+  static Future<Map<String, dynamic>> fetchHostToken(String watchlistId) async {
+    final res = await _get(
+      Uri.parse('$_base/seance/${Uri.encodeComponent(watchlistId)}/host-token'),
+      headers: _auth(),
+    );
+    return _decode(res);
   }
 }
 

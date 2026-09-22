@@ -13,7 +13,8 @@ const upload = multer({
     limits: { fileSize: 20 * 1024 * 1024 },
 });
 
-const IMDB_BASE = 'https://api.imdbapi.dev';
+const { searchTmdb, enrichTmdbStubs, stripTmdbId } = require('../services/tmdbService');
+
 const OMDB_BASE = 'https://www.omdbapi.com';
 const OMDB_POSTER_BASE = 'https://img.omdbapi.com';
 
@@ -24,14 +25,6 @@ function omdbPosterUrl(imdbId) {
 const MAX_MOVIES = 500;
 const CONCURRENCY = 6;
 
-async function imdbJson(urlPath) {
-    const r = await fetch(`${IMDB_BASE}${urlPath}`, { signal: AbortSignal.timeout(8000) });
-    if (r.status === 429) throw Object.assign(new Error('rate_limited'), { code: 429 });
-    if (!r.ok) throw new Error(`imdb_${r.status}`);
-    const data = await r.json();
-    if (data.code) throw new Error(data.message || 'imdb_api_error');
-    return data;
-}
 
 async function omdbJson(params) {
     const url = new URL(OMDB_BASE);
@@ -239,70 +232,89 @@ function parseLetterboxdRating(ratingStr) {
 }
 
 const _norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-async function lookupMovie(name, year) {
+
+function scoreCandidate(c, normTarget, targetYear, normDir) {
+    const cTitle = _norm(c.primaryTitle || '');
+    const cOrig = _norm(c.originalTitle || c.primaryTitle || '');
+    const cDir = _norm(c.directors?.[0]?.primaryName || '');
+    let score = 0;
+    if (cTitle === normTarget || cOrig === normTarget) score += 4;
+    else if (cTitle.includes(normTarget) || normTarget.includes(cTitle)) score += 1;
+    const yearDiff = Math.abs((c.startYear || 0) - targetYear);
+    if (yearDiff === 0) score += 3;
+    else if (yearDiff <= 1) score += 2;
+    else if (yearDiff <= 3) score += 1;
+    if (normDir && cDir) {
+        if (cDir === normDir) score += 3;
+        else if (cDir.includes(normDir) || normDir.includes(cDir)) score += 2;
+    }
+    return score;
+}
+
+async function lookupMovie(name, year, director = '') {
     const normName = _norm(name);
+    const normDir = _norm(director);
 
-    try {
-        const data = await imdbJson(`/search/titles?query=${encodeURIComponent(name)}`);
-        const titles = data.titles || [];
-        const match =
-            titles.find(
-                (t) =>
-                    (_norm(t.primaryTitle || '') === normName ||
-                        _norm(t.originalTitle || '') === normName) &&
-                    Math.abs((t.startYear || 0) - year) <= 2
-            ) ||
-            titles.find((t) => {
-                const tn = _norm(t.primaryTitle || '');
-                return (
-                    Math.abs((t.startYear || 0) - year) <= 2 &&
-                    (tn.includes(normName) || normName.includes(tn))
-                );
-            });
-
-        if (match) {
-            let resolved = null;
-
+    // Phase 1: TMDB + OMDB in parallel; score both against LB title/year/director; take the best.
+    const [tmdbResult, omdbResult] = await Promise.allSettled([
+        (async () => {
+            const data = await searchTmdb(name, 1);
+            const stubs = data.titles || [];
+            const match =
+                stubs.find(
+                    (t) =>
+                        (_norm(t.primaryTitle || '') === normName ||
+                            _norm(t.originalTitle || '') === normName) &&
+                        Math.abs((t.startYear || 0) - year) <= 2
+                ) ||
+                stubs.find((t) => {
+                    const tn = _norm(t.primaryTitle || '');
+                    return (
+                        Math.abs((t.startYear || 0) - year) <= 2 &&
+                        (tn.includes(normName) || normName.includes(tn))
+                    );
+                });
+            if (!match) return null;
+            const enriched = await enrichTmdbStubs([match]);
+            const resolved = enriched[0] ? stripTmdbId(enriched[0]) : null;
+            if (!resolved?.id) return null;
+            await pgSaveMovie(resolved, true);
             try {
-                const full = await imdbJson(`/titles/${match.id}`);
-                await pgSaveMovie(full, true);
-                resolved = full;
-            } catch (_) {}
-
-            try {
-                const raw = await omdbJson({ i: match.id, plot: 'full' });
+                const raw = await omdbJson({ i: resolved.id, plot: 'full' });
                 const m = omdbToImdb(raw);
                 await pgSaveMovie(m, true);
-                if (!resolved || !resolved.primaryImage?.url) resolved = m;
-            } catch (e) {
-                console.error('[import] OMDB 1b failed for', match.id, e.message);
-            }
+                if (!resolved.primaryImage?.url) resolved.primaryImage = m.primaryImage;
+                if (m.directors?.length) resolved.directors = m.directors;
+            } catch (_) {}
+            return resolved;
+        })(),
+        (async () => {
+            const raw = await omdbJson({ t: name, y: String(year), type: 'movie', plot: 'full' });
+            return omdbToImdb(raw);
+        })(),
+    ]);
 
-            if (!resolved) {
-                await pgSaveMovie(match, false);
-                resolved = match;
-            }
+    const tmdb = tmdbResult.status === 'fulfilled' ? tmdbResult.value : null;
+    const omdb = omdbResult.status === 'fulfilled' ? omdbResult.value : null;
 
-            return toEntry(
-                resolved.id || match.id,
-                resolved.primaryTitle || name,
-                resolved.startYear || year,
-                resolved.primaryImage?.url
-            );
+    if (tmdb || omdb) {
+        const candidates = [tmdb, omdb].filter(Boolean);
+        if (candidates.length === 1) {
+            const c = candidates[0];
+            if (c !== tmdb) await pgSaveMovie(c, true);
+            return toEntry(c.id, c.primaryTitle || name, c.startYear || year, c.primaryImage?.url);
         }
-    } catch (err) {
-        if (err.code !== 429) console.error('[import] IMDb search failed for', name, err.message);
+        // Both found — score against LB title/year/director and pick the better match
+        const best =
+            scoreCandidate(tmdb, normName, year, normDir) >=
+            scoreCandidate(omdb, normName, year, normDir)
+                ? tmdb
+                : omdb;
+        if (best !== tmdb) await pgSaveMovie(best, true);
+        return toEntry(best.id, best.primaryTitle || name, best.startYear || year, best.primaryImage?.url);
     }
 
-    try {
-        const raw = await omdbJson({ t: name, y: String(year), type: 'movie', plot: 'full' });
-        const m = omdbToImdb(raw);
-        await pgSaveMovie(m, true);
-        return toEntry(m.id, m.primaryTitle || name, m.startYear || year, m.primaryImage?.url);
-    } catch (e) {
-        console.log('[import] OMDB t+y failed for', name, year, e.message);
-    }
-
+    // Phase 2: OMDB fallbacks when phase 1 fails entirely.
     try {
         const raw = await omdbJson({ t: name, type: 'movie', plot: 'full' });
         const m = omdbToImdb(raw);
@@ -339,14 +351,8 @@ async function lookupMovie(name, year) {
                 const detail = await omdbJson({ i: hit.imdbID, plot: 'full' });
                 const m = omdbToImdb(detail);
                 await pgSaveMovie(m, true);
-                return toEntry(
-                    m.id,
-                    m.primaryTitle || name,
-                    m.startYear || year,
-                    m.primaryImage?.url
-                );
+                return toEntry(m.id, m.primaryTitle || name, m.startYear || year, m.primaryImage?.url);
             } catch (_) {
-                //Return stub if detail fetch fails
                 return toEntry(
                     hit.imdbID,
                     hit.Title || name,
@@ -550,7 +556,7 @@ router.post('/letterboxd', requireAuth, upload.single('file'), async (req, res) 
         const name = (row.name || row['film name'] || row['title'] || '').trim();
         const year = parseInt(row.year) || 0;
         if (!name || !year) return null;
-        const found = await lookupMovie(name, year);
+        const found = await lookupMovie(name, year, (row.director || '').trim());
         return found ? { ...found, _dest: row._dest } : null;
     });
 
@@ -671,7 +677,7 @@ router.post('/letterboxd', requireAuth, upload.single('file'), async (req, res) 
             } catch (_) {}
 
             if (!movie) {
-                const found = await lookupMovie(name, year);
+                const found = await lookupMovie(name, year, (row.director || '').trim());
                 if (found) {
                     try {
                         const r = await pgQuery(

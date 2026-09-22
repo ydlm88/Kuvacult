@@ -26,6 +26,13 @@ dependencies:
   cached_network_image: ^3.4.1
   # Opens URLs in the default browser — used for the update banner link
   url_launcher: ^6.3.1
+  # WebRTC + LiveKit for the Séance screen-share feature
+  livekit_client: ^2.4.0
+  flutter_webrtc: ^1.6.2
+  # Runtime permission requests (mic on Android/Windows)
+  permission_handler: ^11.3.1
+  # Prevents screen from sleeping during an active séance
+  wakelock_plus: ^1.3.4
 
 dev_dependencies:
   flutter_test:

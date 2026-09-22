@@ -314,30 +314,6 @@ class _UserProfileScreenState extends State<UserProfileScreen>
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 10),
-                              GestureDetector(
-                                onTap: () => ScaffoldMessenger.of(context)
-                                    .showSnackBar(SnackBar(
-                                  content: const Text('Messaging coming soon',
-                                      style: TextStyle(color: MC.ink)),
-                                  backgroundColor: MC.bg1,
-                                  behavior: SnackBarBehavior.floating,
-                                  margin: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12)),
-                                )),
-                                child: Container(
-                                  width: 44, height: 44,
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: MC.line, width: 0.5),
-                                    color: MC.bg1,
-                                  ),
-                                  alignment: Alignment.center,
-                                  child: const Icon(Icons.mail_outline_rounded,
-                                      color: MC.ink, size: 18),
-                                ),
-                              ),
                             ],
                           );
                         }),

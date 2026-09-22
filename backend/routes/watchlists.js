@@ -10,7 +10,7 @@ const { OPEN } = require('ws');
 // LEFT JOIN with media so imported movies get their enriched details.
 const MOVIES_WITH_MEDIA = `
   SELECT m.id, m.watchlist_id, m.title, m.year, m.stream_id, m.added_by,
-         m.section, m.stars, m.reactions, m.notes, m.added_at, m.watched_by,
+         m.section, m.stars, m.notes, m.added_at, m.watched_by,
          CASE WHEN m.runtime > 0 THEN m.runtime ELSE COALESCE(med.runtime, 0) END AS runtime,
          CASE WHEN m.rating  > 0 THEN m.rating  ELSE COALESCE(med.rating,  0) END AS rating,
          CASE WHEN m.genres IS DISTINCT FROM '[]'::jsonb THEN m.genres ELSE COALESCE(med.genres, '[]'::jsonb) END AS genres,
@@ -45,7 +45,6 @@ module.exports = function (rooms, broadcastToUser) {
             synopsis: row.synopsis,
             imageUrl: row.image_url,
             stars: row.stars ?? {},
-            reactions: row.reactions ?? {},
             notes: row.notes ?? [],
             watchedBy: row.watched_by ?? [],
             addedAt: row.added_at,
@@ -119,6 +118,36 @@ module.exports = function (rooms, broadcastToUser) {
         }
     });
 
+    // GET /watchlists/veto-lobbies — veto sessions in lobby phase the user can still join
+    router.get('/veto-lobbies', requireAuth, async (req, res) => {
+        try {
+            const userId = req.user.sub;
+            const r = await query(`
+                SELECT vs.watchlist_id, vs.data, w.name AS watchlist_name
+                FROM veto_sessions vs
+                JOIN watchlists w ON w.id = vs.watchlist_id
+                WHERE w.member_ids @> to_jsonb($1::text)
+                  AND vs.data->>'status' = 'lobby'
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(COALESCE(vs.data->'lobbyPlayers', '[]'::jsonb)) p
+                    WHERE p->>'id' = $1
+                  )
+            `, [userId]);
+            res.json({
+                lobbies: r.rows.map(row => ({
+                    watchlistId: row.watchlist_id,
+                    watchlistName: row.watchlist_name,
+                    fromId: (row.data.pickerId) || '',
+                    fromName: (row.data.pickerName) || '',
+                    pickCount: row.data.pickCount || 2,
+                }))
+            });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
     // GET /watchlists/top — community top watchlists by likes
     router.get('/top', async (req, res) => {
         try {
@@ -176,7 +205,7 @@ module.exports = function (rooms, broadcastToUser) {
         try {
             const limit = Math.min(parseInt(req.query.limit) || 50, 200);
             const r = await query(
-                `SELECT id, kind, who, movie_id, text, to_section, reaction, stars, at
+                `SELECT id, kind, who, movie_id, text, to_section, stars, at
          FROM activity
          WHERE watchlist_id = $1
          ORDER BY at DESC
@@ -191,7 +220,6 @@ module.exports = function (rooms, broadcastToUser) {
                     movieId: row.movie_id,
                     text: row.text,
                     to: row.to_section,
-                    reaction: row.reaction,
                     stars: row.stars,
                     at: row.at,
                 }))
@@ -353,10 +381,18 @@ module.exports = function (rooms, broadcastToUser) {
     router.patch('/:id/movies/:movieId', requireAuth, async (req, res) => {
         try {
             const { id: watchlistId, movieId } = req.params;
-            const { section, stars, reaction, memberId } = req.body;
+            const { section, stars, memberId } = req.body;
             let didUpdate = false;
+            let alreadyWatched = false;
 
             if (section === 'watched' && memberId) {
+                // Check before updating so we don't emit duplicate activity events on startup sync.
+                const preMv = await query(
+                    'SELECT watched_by FROM movies WHERE id = $1 AND watchlist_id = $2',
+                    [movieId, watchlistId]
+                );
+                alreadyWatched = (preMv.rows[0]?.watched_by ?? []).includes(memberId);
+
                 await query(
                     `UPDATE movies
            SET watched_by = CASE WHEN watched_by @> $1::jsonb THEN watched_by
@@ -414,15 +450,6 @@ module.exports = function (rooms, broadcastToUser) {
                 didUpdate = true;
             }
 
-            if (reaction && memberId) {
-                await query(
-                    `UPDATE movies SET reactions = reactions || jsonb_build_object($1::text, $2::text)
-           WHERE id = $3 AND watchlist_id = $4`,
-                    [memberId, reaction, movieId, watchlistId]
-                );
-                didUpdate = true;
-            }
-
             if (!didUpdate) return res.status(400).json({ error: 'No valid fields to update' });
 
             const movieR = await query(
@@ -443,16 +470,7 @@ module.exports = function (rooms, broadcastToUser) {
                     type: 'activity_added',
                     event: { kind: 'rated', who: memberId, movieId, stars, at: now },
                 });
-            } else if (reaction && memberId) {
-                await query(
-                    `INSERT INTO activity (id,watchlist_id,kind,who,movie_id,reaction,at) VALUES ($1,$2,'reacted',$3,$4,$5,NOW())`,
-                    [aid, watchlistId, memberId, movieId, reaction]
-                );
-                broadcast(watchlistId, {
-                    type: 'activity_added',
-                    event: { kind: 'reacted', who: memberId, movieId, reaction, at: now },
-                });
-            } else if (section && memberId) {
+            } else if (section && memberId && !(section === 'watched' && alreadyWatched)) {
                 await query(
                     `INSERT INTO activity (id,watchlist_id,kind,who,movie_id,to_section,at) VALUES ($1,$2,'moved',$3,$4,$5,NOW())`,
                     [aid, watchlistId, memberId, movieId, section]

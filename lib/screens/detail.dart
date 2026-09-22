@@ -1,4 +1,4 @@
-// detail.dart — Full movie detail screen with enriched metadata, mark-watched/watchlist/rating/reaction actions, a watcher list, and a paginated community reviews section with comments.
+// detail.dart — Full movie detail screen with enriched metadata, mark-watched/watchlist/rating actions, a watcher list, and a paginated community reviews section with comments.
 
 import 'package:flutter/material.dart';
 import '../widgets/app_image.dart';
@@ -15,6 +15,7 @@ import '../widgets/stream_badge.dart';
 import '../widgets/review_text.dart';
 import '../widgets/star_rating.dart';
 import '../widgets/tag.dart';
+import '../utils/top_toast.dart';
 import '../widgets/watchlist_picker.dart';
 import '../widgets/sign_in_sheet.dart';
 import 'community_reviews.dart';
@@ -145,15 +146,7 @@ class _DetailScreenState extends State<DetailScreen> {
                 _glassButton(
                   onTap: () {
                     // TODO(backend): Share deep-link — POST /movies/:id/share
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                      content: const Text('Share not yet implemented',
-                          style: TextStyle(color: MC.ink, fontSize: 13)),
-                      backgroundColor: MC.bg1,
-                      behavior: SnackBarBehavior.floating,
-                      margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                    ));
+                    showTopToast(context, 'Share not yet implemented');
                   },
                   child: const Icon(Icons.share_outlined, color: MC.ink, size: 14),
                 ),
@@ -337,26 +330,6 @@ class _DetailScreenState extends State<DetailScreen> {
                         : MC.mute,
                     size: 20,
                   ),
-                ),
-              ),
-              const SizedBox(width: 10),
-
-              GestureDetector(
-                onTap: () async {
-                  if (await _requireWatchlist(context, state)) {
-                    _showReactionSheet(context, movie, userId, state);
-                  }
-                },
-                child: Container(
-                  width: 48, height: 48,
-                  decoration: BoxDecoration(
-                    color: MC.bg1,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: MC.line, width: 0.5),
-                  ),
-                  alignment: Alignment.center,
-                  child: const Icon(Icons.favorite_border_rounded,
-                      color: MC.accent1, size: 18),
                 ),
               ),
               const SizedBox(width: 10),
@@ -724,63 +697,6 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
-  void _showReactionSheet(BuildContext context, Movie movie, String userId, AppState state) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: MC.bg1,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('React', style: MT.display(size: 22)),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: ReactionType.values.map((r) {
-                return GestureDetector(
-                  onTap: () {
-                    // Add to watchlist first so the mutation doesn't throw
-                    _ensureInWatchlist(movie, state);
-                    state.reactToMovie(movie.id, userId, r);
-                    Navigator.pop(context);
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: MC.bg2,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: movie.reactions[userId] == r
-                            ? MC.accent1
-                            : MC.line,
-                        width: 0.5,
-                      ),
-                    ),
-                    child: Text(
-                      '${r.mark}  ${r.label}',
-                      style: TextStyle(
-                        color: movie.reactions[userId] == r
-                            ? MC.accent1
-                            : MC.ink,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 24),
-          ],
-        ),
-      ),
-    );
-  }
-
   void _showMovieOptions(BuildContext context) {
     final state = context.read<AppState>();
     final movie = state.findMovie(widget.movie.id) ?? widget.movie;
@@ -832,8 +748,8 @@ class _DetailScreenState extends State<DetailScreen> {
               title: const Text('Add to watchlist',
                   style: TextStyle(color: MC.ink)),
               onTap: () {
-                state.addMovieToWatchlist(movie);
                 Navigator.pop(context);
+                showWatchlistPicker(context, movie);
               },
             ),
           const SizedBox(height: 16),

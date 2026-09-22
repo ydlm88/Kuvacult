@@ -19,6 +19,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
     "jsonwebtoken": "^9.0.3",
+    "livekit-server-sdk": "^2.19.0",
     "multer": "^2.2.0",
     "nodemailer": "^9.0.1",
     "pg": "^8.21.0",

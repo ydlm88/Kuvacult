@@ -49,7 +49,18 @@ module.exports = function (broadcastToUser) {
     router.get('/', async (req, res) => {
         try {
             const limit = Math.min(parseInt(req.query.limit) || 500, 2000);
-            const r = await query('SELECT * FROM reviews ORDER BY at DESC LIMIT $1', [limit]);
+            const r = await query(
+                `SELECT r.id, r.by_id,
+                    COALESCE(u.display_name, r.by_name) AS by_name,
+                    r.by_handle,
+                    COALESCE(u.avatar_url, r.by_avatar_url) AS by_avatar_url,
+                    r.movie_id, r.movie_title, r.movie_year, r.movie_director, r.movie_poster_url,
+                    r.stars, r.text, r.rewatch, r.likes, r.liked_by, r.comment_count, r.at
+                 FROM reviews r
+                 LEFT JOIN users u ON u.id = r.by_id
+                 ORDER BY r.at DESC LIMIT $1`,
+                [limit]
+            );
             res.json(r.rows.map(reviewShape));
         } catch (err) {
             res.status(500).json({ error: err.message });
@@ -168,7 +179,18 @@ module.exports = function (broadcastToUser) {
     // GET /reviews/:id
     router.get('/:id', async (req, res) => {
         try {
-            const r = await query('SELECT * FROM reviews WHERE id = $1', [req.params.id]);
+            const r = await query(
+                `SELECT r.id, r.by_id,
+                    COALESCE(u.display_name, r.by_name) AS by_name,
+                    r.by_handle,
+                    COALESCE(u.avatar_url, r.by_avatar_url) AS by_avatar_url,
+                    r.movie_id, r.movie_title, r.movie_year, r.movie_director, r.movie_poster_url,
+                    r.stars, r.text, r.rewatch, r.likes, r.liked_by, r.comment_count, r.at
+                 FROM reviews r
+                 LEFT JOIN users u ON u.id = r.by_id
+                 WHERE r.id = $1`,
+                [req.params.id]
+            );
             if (!r.rows.length) return res.status(404).json({ error: 'Review not found' });
             res.json(reviewShape(r.rows[0]));
         } catch (err) {
@@ -224,9 +246,19 @@ module.exports = function (broadcastToUser) {
     // GET /reviews/by-movie/:movieId
     router.get('/by-movie/:movieId', async (req, res) => {
         try {
-            const r = await query('SELECT * FROM reviews WHERE movie_id = $1 ORDER BY at DESC', [
-                req.params.movieId,
-            ]);
+            const r = await query(
+                `SELECT r.id, r.by_id,
+                    COALESCE(u.display_name, r.by_name) AS by_name,
+                    r.by_handle,
+                    COALESCE(u.avatar_url, r.by_avatar_url) AS by_avatar_url,
+                    r.movie_id, r.movie_title, r.movie_year, r.movie_director, r.movie_poster_url,
+                    r.stars, r.text, r.rewatch, r.likes, r.liked_by, r.comment_count, r.at
+                 FROM reviews r
+                 LEFT JOIN users u ON u.id = r.by_id
+                 WHERE r.movie_id = $1
+                 ORDER BY r.at DESC`,
+                [req.params.movieId]
+            );
             res.json(r.rows.map(reviewShape));
         } catch (err) {
             res.status(500).json({ error: err.message });
@@ -251,7 +283,15 @@ module.exports = function (broadcastToUser) {
     router.get('/:id/comments', async (req, res) => {
         try {
             const r = await query(
-                'SELECT * FROM review_comments WHERE review_id = $1 ORDER BY at ASC',
+                `SELECT c.id, c.review_id, c.by_id,
+                    COALESCE(u.display_name, c.by_name) AS by_name,
+                    c.by_handle,
+                    COALESCE(u.avatar_url, c.by_avatar_url) AS by_avatar_url,
+                    c.text, c.likes, c.liked_by, c.at
+                 FROM review_comments c
+                 LEFT JOIN users u ON u.id = c.by_id
+                 WHERE c.review_id = $1
+                 ORDER BY c.at ASC`,
                 [req.params.id]
             );
             res.json(r.rows.map(commentShape));

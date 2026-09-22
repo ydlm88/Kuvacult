@@ -69,13 +69,6 @@ class NotificationsScreen extends StatelessWidget {
                   ...rtNotifs.map((n) => _ActivityTile(notif: n)),
                   const SizedBox(height: 8),
                 ],
-
-                _sectionHeader('MESSAGES'),
-                _comingSoonTile(
-                  icon: Icons.mail_outline_rounded,
-                  label: 'Messages',
-                  subtitle: 'Direct messages — coming soon',
-                ),
               ],
             )
           : _emptyState(),
@@ -85,46 +78,6 @@ class NotificationsScreen extends StatelessWidget {
   Widget _sectionHeader(String label) => Padding(
         padding: const EdgeInsets.fromLTRB(4, 12, 4, 6),
         child: Text(label, style: MT.mono(size: 10, letterSpacing: 2, color: MC.dim)),
-      );
-
-  Widget _comingSoonTile({
-    required IconData icon,
-    required String label,
-    required String subtitle,
-  }) =>
-      Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: MC.bg1,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: MC.line, width: 0.5),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: MC.bg2,
-                shape: BoxShape.circle,
-              ),
-              alignment: Alignment.center,
-              child: Icon(icon, color: MC.dim, size: 18),
-            ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: const TextStyle(
-                        color: MC.ink, fontSize: 13, fontWeight: FontWeight.w600)),
-                Text(subtitle,
-                    style: const TextStyle(color: MC.mute, fontSize: 12)),
-              ],
-            ),
-          ],
-        ),
       );
 
   Widget _emptyState() => Center(

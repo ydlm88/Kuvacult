@@ -4,14 +4,19 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../theme.dart';
 import '../models.dart';
 import '../app_state.dart';
 import '../services/api_service.dart';
 import '../services/veto_service.dart';
+import '../services/seance_service.dart';
 import '../widgets/poster.dart';
 import '../widgets/stream_badge.dart';
+import '../widgets/candle_widget.dart';
+import '../utils/top_toast.dart';
 import 'detail.dart';
+import 'seance_screen.dart';
 
 class VetoScreen extends StatefulWidget {
   const VetoScreen({super.key});
@@ -45,6 +50,9 @@ class _VetoScreenState extends State<VetoScreen> {
   StreamSubscription<VetoEvent>? _sub;
   String? _watchlistId;
 
+  SeanceSession? _activeSeance;
+  final _seanceCardKey = GlobalKey<_SeanceCardState>();
+
   int _myMaxVetos(String userId) => _maxVetosByPlayer[userId] ?? 0;
   int _myVetosLeft(String userId) => _myMaxVetos(userId) - _myVetoIds.length;
 
@@ -63,8 +71,11 @@ class _VetoScreenState extends State<VetoScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final wls = context.read<AppState>().watchlists;
-      if (wls.length == 1) _connect(wls.first.id);
+      final appState = context.read<AppState>();
+      final wls = appState.watchlists;
+      if (wls.isNotEmpty) _connect(wls.first.id);
+      appState.refreshAvailableSeances();
+      appState.refreshVetoInvites();
     });
   }
 
@@ -83,11 +94,28 @@ class _VetoScreenState extends State<VetoScreen> {
     _sub = _veto!.events.listen(_handleEvent);
     if (mounted) _resetState();
 
+    // Sync séance state for late arrivals (read-only GET, no broadcasts).
+    ApiService.fetchSeanceSession(wlId).then((data) {
+      if (!mounted) return;
+      if (data['active'] == true) {
+        final session = SeanceSession.fromJson(data);
+        setState(() => _activeSeance = session);
+        // Ensure the radar is aware of this session even if the WS event was missed.
+        context.read<AppState>().addAvailableSeanceIfNotPresent(session);
+      } else {
+        setState(() => _activeSeance = null);
+      }
+    }).catchError((_) {});
+
     final session = await ApiService.fetchVetoSession(wlId);
     if (session != null && mounted) {
       final appState = context.read<AppState>();
       final userId   = appState.currentUser?.id ?? 'guest';
       _restoreFromSession(session, userId);
+      // If game moved past lobby without the user, clear any pending invite for this watchlist.
+      if (_gameStatus != '' && _gameStatus != 'lobby' && !_amInLobby) {
+        appState.dismissVetoInviteFor(wlId);
+      }
       if (autoJoin && _gameStatus == 'lobby' && !_amInLobby) {
         _veto?.joinLobby(
           playerId:   userId,
@@ -141,6 +169,8 @@ class _VetoScreenState extends State<VetoScreen> {
       _totalCount       = 0;
       _takenIds         = {};
       _blackjack        = null;
+      // Note: _activeSeance is intentionally NOT reset here —
+      // a séance can be live while the veto game is not running.
     });
   }
 
@@ -180,6 +210,9 @@ class _VetoScreenState extends State<VetoScreen> {
         });
 
       case 'veto_picking_started':
+        if (!_amInLobby && _watchlistId != null) {
+          context.read<AppState>().dismissVetoInviteFor(_watchlistId!);
+        }
         final lobby = _parseLobby(e.data['lobbyPlayers']);
         setState(() {
           _gameStatus       = 'picking';
@@ -236,13 +269,7 @@ class _VetoScreenState extends State<VetoScreen> {
         setState(() => _vetoedIds.add(e.data['vetoedId'] as String));
 
       case 'veto_stalemate':
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Text('Stalemate! Going straight to blackjack…'),
-          backgroundColor: MC.bg1,
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.fromLTRB(20, 0, 20, 104),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ));
+        showTopToast(context, 'Stalemate! Going straight to blackjack…');
 
       case 'blackjack_start':
         setState(() {
@@ -258,11 +285,24 @@ class _VetoScreenState extends State<VetoScreen> {
           final bj = BlackjackState.fromMap(bjData);
           setState(() {
             _blackjack = bj;
-            if (bj.status == 'playing')      _gameStatus = 'blackjack_playing';
-            else if (bj.status == 'redeal')  _gameStatus = 'blackjack_redeal';
-            else if (bj.status == 'done')    _gameStatus = 'done';
+            if (bj.status == 'playing') { _gameStatus = 'blackjack_playing'; }
+            else if (bj.status == 'redeal') { _gameStatus = 'blackjack_redeal'; }
+            else if (bj.status == 'done') { _gameStatus = 'done'; }
           });
         }
+
+      case 'seance_started':
+        setState(() => _activeSeance = SeanceSession(
+              watchlistId: _watchlistId ?? '',
+              hostId: e.data['hostId'] as String? ?? '',
+              hostName: e.data['hostName'] as String? ?? '',
+              hostAvatarUrl: e.data['hostAvatarUrl'] as String?,
+              livekitRoom: '',
+            ));
+
+      case 'seance_ended':
+        setState(() => _activeSeance = null);
+        _seanceCardKey.currentState?.signalRemoteEnd();
 
       case 'veto_winner':
         context.read<AppState>().promoteToTopPickAndSync(e.data['winnerId'] as String);
@@ -299,7 +339,21 @@ class _VetoScreenState extends State<VetoScreen> {
       });
     }
 
-    if (watchlists.length == 1 && _watchlistId == null) {
+    final pendingSeanceAccept = state.pendingSeanceAccept;
+    if (pendingSeanceAccept != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        state.clearPendingSeanceAccept();
+        setState(() => _activeSeance = pendingSeanceAccept);
+        if (_watchlistId != pendingSeanceAccept.watchlistId) {
+          _connect(pendingSeanceAccept.watchlistId);
+          await Future.delayed(const Duration(milliseconds: 400));
+        }
+        if (mounted) _seanceCardKey.currentState?.autoJoin();
+      });
+    }
+
+    if (watchlists.isNotEmpty && _watchlistId == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _watchlistId == null) _connect(watchlists.first.id);
       });
@@ -332,9 +386,35 @@ class _VetoScreenState extends State<VetoScreen> {
         children: [
           CustomScrollView(
             slivers: [
+              // ── Séance section (own header + compact card) ───────────────
+              if (watchlists.isNotEmpty) ...[
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 62, 20, 10),
+                    child: Text('SÉANCE', style: MT.mono(size: 10, letterSpacing: 2)),
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                    child: _SeanceCard(
+                      key: _seanceCardKey,
+                      activeSeance: _activeSeance,
+                      watchlists: watchlists,
+                      currentUserId: userId,
+                      currentUserName: state.currentUser?.displayName,
+                      currentUserAvatarUrl: state.currentUser?.avatarUrl,
+                      onStarted: (session) => setState(() => _activeSeance = session),
+                      onEnded: () => setState(() => _activeSeance = null),
+                    ),
+                  ),
+                ),
+              ],
+
+              // ── Veto Sacrifice header ─────────────────────────────────────
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 62, 20, 12),
+                  padding: EdgeInsets.fromLTRB(20, watchlists.isEmpty ? 62 : 0, 20, 12),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -371,7 +451,21 @@ class _VetoScreenState extends State<VetoScreen> {
                   ),
                 ),
 
-              if (_gameStatus == '' && _watchlistId != null)
+              if (_gameStatus == '' && _watchlistId != null &&
+                  (selectedWl?.memberIds.length ?? 0) < 2)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(20, 8, 20, 0),
+                    child: _EmptyState(
+                      icon: Icons.group_outlined,
+                      headline: 'Needs more cultists',
+                      body: 'The veto ritual requires at least 2 members. Invite someone to this watchlist first.',
+                    ),
+                  ),
+                ),
+
+              if (_gameStatus == '' && _watchlistId != null &&
+                  (selectedWl?.memberIds.length ?? 0) >= 2)
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
@@ -765,7 +859,7 @@ class _VetoScreenState extends State<VetoScreen> {
                   ),
                   alignment: Alignment.center,
                   child: Text('Create Lobby',
-                      style: GoogleFonts.playfairDisplay(
+                      style: GoogleFonts.newsreader(
                           fontSize: 17, fontWeight: FontWeight.w700, color: MC.accentInk)),
                 ),
               ),
@@ -777,8 +871,7 @@ class _VetoScreenState extends State<VetoScreen> {
   }
 
   void _showPickerSheet(BuildContext context, AppState state, Watchlist watchlist) {
-    final userId   = state.currentUser?.id ?? 'guest';
-    final userName = state.currentUser?.displayName ?? 'Guest';
+    final userId = state.currentUser?.id ?? 'guest';
     final Set<String> selected = {};
     String search = '';
 
@@ -805,7 +898,8 @@ class _VetoScreenState extends State<VetoScreen> {
             initialChildSize: 0.75,
             maxChildSize: 0.95,
             expand: false,
-            builder: (_, scroll) => Column(
+            builder: (_, scroll) => ClipRect(
+              child: Column(
               children: [
                 const SizedBox(height: 8),
                 Container(
@@ -954,6 +1048,7 @@ class _VetoScreenState extends State<VetoScreen> {
                 ),
               ],
             ),
+          ),
           );
         },
       ),
@@ -1019,9 +1114,9 @@ class _VetoLobbyCard extends StatelessWidget {
           )),
           if (!amInLobby) ...[
             const Divider(color: MC.line, height: 20),
-            Text(
+            const Text(
               'You\'ve been invited to this game.',
-              style: const TextStyle(color: MC.mute, fontSize: 13),
+              style: TextStyle(color: MC.mute, fontSize: 13),
             ),
           ] else if (lobbyPlayers.length < 2)
             Text(
@@ -1244,7 +1339,7 @@ class _BlackjackOverlayState extends State<_BlackjackOverlay> {
                           movie: m,
                           isMyBet: isMyBet,
                           isOtherBet: isOtherBet,
-                          otherPlayerName: isOtherBet ? serverBet!.playerName : null,
+                          otherPlayerName: isOtherBet ? serverBet.playerName : null,
                         ),
                       );
                     }).toList(),
@@ -1276,7 +1371,7 @@ class _BlackjackOverlayState extends State<_BlackjackOverlay> {
                             .firstWhere((mo) => mo?.id == _mySelectedMovieId, orElse: () => null)
                             ?.title ?? '';
                         return Text('Bet on $selTitle',
-                            style: GoogleFonts.playfairDisplay(
+                            style: GoogleFonts.newsreader(
                                 fontSize: 17, fontWeight: FontWeight.w700, color: MC.accentInk));
                       }(),
                     ),
@@ -1341,7 +1436,7 @@ class _BlackjackOverlayState extends State<_BlackjackOverlay> {
                                   boxShadow: [BoxShadow(color: MC.accent1.withAlpha(56), blurRadius: 18, offset: const Offset(0, 6))],
                                 ),
                                 alignment: Alignment.center,
-                                child: Text('Hit', style: GoogleFonts.playfairDisplay(fontSize: 17, fontWeight: FontWeight.w700, color: MC.accentInk)),
+                                child: Text('Hit', style: GoogleFonts.newsreader(fontSize: 17, fontWeight: FontWeight.w400, color: MC.accentInk)),
                               ),
                             ),
                           ),
@@ -1356,7 +1451,7 @@ class _BlackjackOverlayState extends State<_BlackjackOverlay> {
                                   borderRadius: BorderRadius.circular(13),
                                 ),
                                 alignment: Alignment.center,
-                                child: Text('Stand', style: GoogleFonts.playfairDisplay(fontSize: 16, fontWeight: FontWeight.w600, color: MC.ink)),
+                                child: Text('Stand', style: GoogleFonts.newsreader(fontSize: 16, fontWeight: FontWeight.w400, color: MC.ink)),
                               ),
                             ),
                           ),
@@ -1374,7 +1469,7 @@ class _BlackjackOverlayState extends State<_BlackjackOverlay> {
                             boxShadow: [BoxShadow(color: MC.accent1.withAlpha(56), blurRadius: 18, offset: const Offset(0, 6))],
                           ),
                           alignment: Alignment.center,
-                          child: Text('Deal Again', style: GoogleFonts.playfairDisplay(fontSize: 17, fontWeight: FontWeight.w700, color: MC.accentInk)),
+                          child: Text('Deal Again', style: GoogleFonts.newsreader(fontSize: 17, fontWeight: FontWeight.w400, color: MC.accentInk)),
                         ),
                       );
                     }
@@ -1507,7 +1602,7 @@ class _HouseRow extends StatelessWidget {
             child: Text(
               bust ? '✗' : reveal ? '$total' : house.isEmpty ? '—' : '$upcard+',
               textAlign: TextAlign.right,
-              style: GoogleFonts.playfairDisplay(
+              style: GoogleFonts.newsreader(
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
                   color: bust ? const Color(0xFFB91C1C) : MC.ink),
@@ -1587,7 +1682,7 @@ class _PlayerRowBJ extends StatelessWidget {
                   child: Text(
                     bust ? '✗' : player.hand.isEmpty ? '—' : '$val',
                     textAlign: TextAlign.right,
-                    style: GoogleFonts.playfairDisplay(
+                    style: GoogleFonts.newsreader(
                         fontSize: 18,
                         fontWeight: FontWeight.w700,
                         color: bust ? const Color(0xFFB91C1C) : isHot ? MC.accent1 : MC.mute),
@@ -1679,7 +1774,7 @@ class _MiniCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(card!.rank,
-                style: GoogleFonts.playfairDisplay(
+                style: GoogleFonts.newsreader(
                     fontSize: width * 0.42, fontWeight: FontWeight.w700,
                     color: isRed ? const Color(0xFFB91C1C) : MC.ink, height: 0.95)),
             Text(card!.suit,
@@ -2097,6 +2192,788 @@ class _WinnerCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ── Séance card ───────────────────────────────────────────────────────────────
+class _SeanceCard extends StatefulWidget {
+  final SeanceSession? activeSeance;
+  final List<Watchlist> watchlists;
+  final String currentUserId;
+  final String? currentUserName;
+  final String? currentUserAvatarUrl;
+  final ValueChanged<SeanceSession> onStarted;
+  final VoidCallback onEnded;
+
+  const _SeanceCard({
+    super.key,
+    required this.activeSeance,
+    required this.watchlists,
+    required this.currentUserId,
+    this.currentUserName,
+    this.currentUserAvatarUrl,
+    required this.onStarted,
+    required this.onEnded,
+  });
+
+  @override
+  State<_SeanceCard> createState() => _SeanceCardState();
+}
+
+class _SeanceCardState extends State<_SeanceCard> {
+  bool _lit = false;
+  bool _loading = false;
+  // Set true when a non-host dismisses an active invite so they can start their own.
+  bool _declined = false;
+  SeanceService? _activeSvc;
+  // Set while the pop-out pill is visible; calling it removes the overlay.
+  VoidCallback? _removePopOutOverlay;
+
+  @override
+  void initState() {
+    super.initState();
+    _lit = widget.activeSeance != null;
+  }
+
+  @override
+  void didUpdateWidget(_SeanceCard old) {
+    super.didUpdateWidget(old);
+    final nowActive = widget.activeSeance != null;
+    if (!nowActive) _declined = false;
+    // Don't clobber optimistic _lit=true while an operation is in progress —
+    // otherwise any mid-call widget rebuild will extinguish the candle.
+    if (!_loading) {
+      if (_lit != nowActive && !_declined) setState(() => _lit = nowActive);
+      if (!nowActive && _lit) setState(() => _lit = false);
+    }
+  }
+
+  bool get _isHost => widget.activeSeance?.hostId == widget.currentUserId;
+
+  // True when another user is hosting and this user hasn't declined the invite.
+  bool get _canJoin =>
+      widget.activeSeance != null && !_isHost && !_declined;
+
+  Future<void> _toggle() async {
+    if (_loading) return;
+    if (!_lit) {
+      setState(() { _lit = true; _declined = false; });
+    } else if (_isHost && widget.activeSeance != null) {
+      await _endSeance();
+    } else if (_canJoin) {
+      await _joinSeance();
+    } else {
+      setState(() => _lit = false);
+    }
+  }
+
+  void _declineSeance() {
+    setState(() {
+      _declined = true;
+      _lit = false;
+    });
+  }
+
+  void autoJoin() {
+    if (!mounted) return;
+    _joinSeance();
+  }
+
+  void signalRemoteEnd() => _activeSvc?.signalRemoteEnd();
+
+  Future<void> _returnToSeance() async {
+    if (!mounted || widget.activeSeance == null || _activeSvc != null) return;
+    setState(() => _loading = true);
+    try {
+      final data = await ApiService.fetchHostToken(widget.activeSeance!.watchlistId);
+      if (!mounted) return;
+      final session = widget.activeSeance!;
+      await _openSeanceScreen(
+        token: data['token'] as String,
+        livekitHost: data['livekitHost'] as String? ?? '',
+        session: session,
+        isHost: true,
+      );
+    } on ApiException catch (e) {
+      if (mounted) _showSnack(e.message);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<String?> _pickWatchlist() async {
+    if (widget.watchlists.length == 1) return widget.watchlists.first.id;
+    return showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final maxH = MediaQuery.of(ctx).size.height * 0.6;
+        return Container(
+          margin: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+          constraints: BoxConstraints(maxHeight: maxH),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1612),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0x1FF4ECDE)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+                child: Text('Invite which cult?',
+                    style: GoogleFonts.newsreader(
+                        fontSize: 22, color: const Color(0xFFF4ECDE))),
+              ),
+              const Divider(height: 1, color: Color(0x14F4ECDE)),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: widget.watchlists.length,
+                  itemBuilder: (_, i) {
+                    final wl = widget.watchlists[i];
+                    return GestureDetector(
+                      onTap: () => Navigator.pop(context, wl.id),
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+                        decoration: const BoxDecoration(
+                            border: Border(
+                                bottom: BorderSide(
+                                    color: Color(0x0FF4ECDE)))),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(wl.name,
+                                style: const TextStyle(
+                                    color: Color(0xFFF4ECDE),
+                                    fontSize: 15,
+                                    height: 1.2)),
+                            const SizedBox(height: 3),
+                            Text(
+                              '${wl.memberIds.length} member${wl.memberIds.length == 1 ? '' : 's'}',
+                              style: TextStyle(
+                                  fontFamily: GoogleFonts.martianMono().fontFamily,
+                                  fontSize: 10,
+                                  letterSpacing: 1.4,
+                                  color: const Color(0x66F4ECDE)),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _beginSeance() async {
+    // Set loading BEFORE the first await so didUpdateWidget can't clobber the
+    // optimistic _lit=true while the watchlist picker or permission dialog is open.
+    setState(() => _loading = true);
+    final wlId = await _pickWatchlist();
+    if (!mounted || wlId == null) {
+      if (mounted) setState(() { _loading = false; _lit = false; });
+      return;
+    }
+
+    final micStatus = await Permission.microphone.request();
+    if (!mounted) return;
+    if (!micStatus.isGranted) {
+      if (mounted) setState(() { _loading = false; _lit = false; });
+      _showPermissionSnack('Séance requires mic access. Enable it in Settings.');
+      return;
+    }
+    try {
+      final data = await ApiService.startSeance(wlId);
+      if (!mounted) return;
+      final session = SeanceSession(
+        watchlistId: wlId,
+        hostId: data['hostId'] as String? ?? '',
+        hostName: data['hostName'] as String? ?? '',
+        hostAvatarUrl: data['hostAvatarUrl'] as String?,
+        livekitRoom: data['livekitRoom'] as String? ?? '',
+      );
+      setState(() => _lit = true);
+      widget.onStarted(session);
+      await _openSeanceScreen(
+        token: data['token'] as String,
+        livekitHost: data['livekitHost'] as String? ?? '',
+        session: session,
+        isHost: true,
+      );
+    } on ApiException catch (e) {
+      if (mounted) _showSnack(e.message);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _joinSeance() async {
+    final activeSeance = widget.activeSeance;
+    if (activeSeance == null || !mounted) return;
+    final activeWlId = activeSeance.watchlistId;
+    setState(() => _loading = true);
+    try {
+      final data = await ApiService.joinSeance(activeWlId);
+      if (!mounted) return;
+      final session = SeanceSession(
+        watchlistId: activeWlId,
+        hostId: data['hostId'] as String? ?? '',
+        hostName: data['hostName'] as String? ?? '',
+        hostAvatarUrl: data['hostAvatarUrl'] as String?,
+        livekitRoom: data['livekitRoom'] as String? ?? '',
+      );
+      await _openSeanceScreen(
+        token: data['token'] as String,
+        livekitHost: data['livekitHost'] as String? ?? '',
+        session: session,
+        isHost: false,
+      );
+    } on ApiException catch (e) {
+      if (mounted) _showSnack(e.message);
+    } catch (e) {
+      if (mounted) _showSnack('Could not join séance');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _endSeance() async {
+    final active = widget.activeSeance;
+    if (active == null) return;
+    final activeWlId = active.watchlistId;
+    setState(() { _lit = false; _loading = true; });
+    // If popped out: close the floating pill and kill the stream before the API call.
+    final poppedOutSvc = _activeSvc;
+    if (poppedOutSvc != null) {
+      _removePopOutOverlay?.call();
+      _activeSvc = null;
+      await poppedOutSvc.dispose();
+    }
+    try {
+      await ApiService.endSeance(activeWlId);
+      if (mounted) widget.onEnded();
+    } on ApiException catch (e) {
+      if (mounted) { setState(() => _lit = true); _showSnack(e.message); }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _openSeanceScreen({
+    required String token,
+    required String livekitHost,
+    required SeanceSession session,
+    required bool isHost,
+  }) async {
+    final svc = SeanceService();
+    try {
+      if (isHost) {
+        await svc.startAsHost(livekitHost, token);
+      } else {
+        await svc.joinAsViewer(livekitHost, token, hostIdentity: session.hostId);
+      }
+    } catch (e) {
+      await svc.dispose();
+      if (mounted) _showSnack('Could not connect: ${e.toString()}');
+      return;
+    }
+    if (!mounted) { await svc.dispose(); return; }
+    _activeSvc = svc;
+
+    final activeWlId = session.watchlistId;
+    final nav = Navigator.of(context);
+    bool poppedOut = false;
+    OverlayEntry? floatingOverlay;
+
+    bool onEndedFired = false;
+
+    void removeOverlay() {
+      floatingOverlay?.remove();
+      floatingOverlay = null;
+      _removePopOutOverlay = null;
+    }
+
+    // Shared end-séance handler — guarded so button tap + WS event can't both fire.
+    Future<void> onSeanceEnded() async {
+      if (onEndedFired) return;
+      onEndedFired = true;
+      if (isHost) {
+        try { await ApiService.endSeance(activeWlId); } catch (_) {}
+      }
+      removeOverlay();
+      _activeSvc = null;
+      if (mounted) nav.pop();
+      await svc.dispose();
+      if (mounted) widget.onEnded();
+    }
+
+    // Forward-declared so showPill and returnToSeance can mutually reference.
+    late final Future<void> Function() returnToSeance;
+    late final void Function() showPill;
+
+    returnToSeance = () async {
+      poppedOut = false;
+      removeOverlay();
+      if (!mounted) return;
+      // Re-push with the SAME service — preserves screen share and audio.
+      await nav.push<void>(
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (_) => SeanceScreen(
+            service: svc,
+            isHost: isHost,
+            hostName: session.hostName,
+            hostId: session.hostId,
+            hostAvatarUrl: session.hostAvatarUrl,
+            currentUserId: widget.currentUserId,
+            currentUserName: widget.currentUserName,
+            currentUserAvatarUrl: widget.currentUserAvatarUrl,
+            onEnded: onSeanceEnded,
+            onPopOut: () {
+              poppedOut = true;
+              nav.pop();
+            },
+          ),
+        ),
+      );
+      if (poppedOut && mounted) {
+        poppedOut = false;
+        showPill();
+      }
+    };
+
+    showPill = () {
+      final pillCollapsed = ValueNotifier<bool>(false);
+      final overlayState = Overlay.of(context);
+      floatingOverlay = OverlayEntry(
+        builder: (ctx) => ValueListenableBuilder<bool>(
+          valueListenable: pillCollapsed,
+          builder: (_, collapsed, __) {
+            final bottom = MediaQuery.of(ctx).padding.bottom + 90;
+            if (collapsed) {
+              return Positioned(
+                bottom: bottom,
+                right: 16,
+                child: Material(
+                  color: Colors.transparent,
+                  child: GestureDetector(
+                    onTap: () => pillCollapsed.value = false,
+                    child: Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A1210),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: const Color(0xFFE8A13C).withAlpha(120)),
+                        boxShadow: const [BoxShadow(color: Color(0x88000000), blurRadius: 14)],
+                      ),
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          const Icon(Icons.sensors, size: 22, color: Color(0xFFE8A13C)),
+                          Positioned(
+                            top: 9, right: 9,
+                            child: Container(
+                              width: 8, height: 8,
+                              decoration: const BoxDecoration(
+                                  shape: BoxShape.circle, color: Color(0xFF4ADE80)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }
+            return Positioned(
+              bottom: bottom,
+              left: 16,
+              right: 16,
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1A1210),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFFE8A13C).withAlpha(120)),
+                    boxShadow: const [
+                      BoxShadow(color: Color(0x88000000), blurRadius: 20, offset: Offset(0, 6)),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.sensors, size: 16, color: Color(0xFFE8A13C)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Séance active — ${session.hostName}',
+                          style: TextStyle(
+                            fontFamily: GoogleFonts.martianMono().fontFamily,
+                            fontSize: 11,
+                            color: const Color(0xFFF3E4CF),
+                            letterSpacing: 0.5,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      AnimatedBuilder(
+                        animation: svc,
+                        builder: (_, __) => GestureDetector(
+                          onTap: () => svc.toggleMic(),
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: svc.micMuted
+                                  ? const Color(0x29E8A13C)
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Icon(
+                              svc.micMuted
+                                  ? Icons.mic_off_outlined
+                                  : Icons.mic_none_outlined,
+                              size: 16,
+                              color: const Color(0xBFF3E4CF),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      GestureDetector(
+                        onTap: () => returnToSeance(),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE8A13C),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            'RETURN',
+                            style: TextStyle(
+                              fontFamily: GoogleFonts.martianMono().fontFamily,
+                              fontSize: 10,
+                              color: const Color(0xFF1B1210),
+                              letterSpacing: 1.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      GestureDetector(
+                        onTap: () => pillCollapsed.value = true,
+                        child: const Padding(
+                          padding: EdgeInsets.all(4),
+                          child: Icon(Icons.remove_rounded, color: Color(0xCCF3E4CF), size: 16),
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: () async {
+                          setState(() { _lit = false; });
+                          removeOverlay();
+                          if (isHost) {
+                            try { await ApiService.endSeance(activeWlId); } catch (_) {}
+                          }
+                          _activeSvc = null;
+                          await svc.dispose();
+                          if (mounted) widget.onEnded();
+                        },
+                        child: const Padding(
+                          padding: EdgeInsets.all(4),
+                          child: Icon(Icons.close_rounded, color: Color(0xCCF3E4CF), size: 16),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      );
+      overlayState.insert(floatingOverlay!);
+      _removePopOutOverlay = removeOverlay;
+    };
+
+    await nav.push<void>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => SeanceScreen(
+          service: svc,
+          isHost: isHost,
+          hostName: session.hostName,
+          hostId: session.hostId,
+          hostAvatarUrl: session.hostAvatarUrl,
+          currentUserId: widget.currentUserId,
+          currentUserName: widget.currentUserName,
+          currentUserAvatarUrl: widget.currentUserAvatarUrl,
+          onEnded: onSeanceEnded,
+          onPopOut: () {
+            poppedOut = true;
+            nav.pop();
+          },
+        ),
+      ),
+    );
+
+    if (poppedOut && mounted) {
+      // Service stays alive while the pill is visible — do NOT dispose here.
+      showPill();
+      return;
+    }
+
+    _activeSvc = null;
+    if (!onEndedFired) await svc.dispose();
+  }
+
+  void _showSnack(String msg) => showTopToast(context, msg);
+
+  void _showPermissionSnack(String msg) {
+    showTopToast(context, '$msg — open Settings to allow');
+    // Open settings after a brief delay so the toast is readable
+    Future.delayed(const Duration(milliseconds: 400), openAppSettings);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final active = widget.activeSeance;
+
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: const Color(0xFF121010),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: _lit ? const Color(0x8CE8A13C) : const Color(0x47E8A13C),
+        ),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x8C000000), blurRadius: 60, offset: Offset(0, 24)),
+        ],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // warm spill anchored on the candle (left), not the card centre
+          Positioned(
+            left: -88,
+            top: -120,
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 800),
+                opacity: _lit ? 1 : 0,
+                child: Container(
+                  width: 320,
+                  height: 320,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        Color(0x33FFA647),
+                        Color(0x12FF8C2B),
+                        Color(0x00000000),
+                      ],
+                      stops: [0.0, 0.42, 0.72],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              CandleWidget(lit: _lit, onTap: _toggle, width: 86, height: 118),
+              const SizedBox(width: 18),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            'Séance',
+                            style: GoogleFonts.newsreader(
+                              fontSize: 26,
+                              height: 1.1,
+                              color: const Color(0xFFF3E4CF),
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (_lit) ...[
+                          const SizedBox(width: 10),
+                          _LiveBadge(),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      _lit
+                          ? (_canJoin
+                              ? '${active?.hostName ?? ''} is hosting'
+                              : 'The cult is gathering — the candle is lit.')
+                          : 'Light the candle, Share what you see.',
+                      style: TextStyle(
+                        fontFamily: GoogleFonts.martianMono().fontFamily,
+                        fontSize: 11,
+                        height: 1.6,
+                        color: const Color(0x8CF3E4CF),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (_lit && !_declined) ...[
+                const SizedBox(width: 18),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    GestureDetector(
+                      onTap: () {
+                        if (_isHost && widget.activeSeance != null) {
+                          _returnToSeance();
+                        } else if (_canJoin) {
+                          _joinSeance();
+                        } else {
+                          _beginSeance();
+                        }
+                      },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 220),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 22, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: const Color(0x1FE8A13C),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                              color: const Color(0x66E8A13C)),
+                        ),
+                        child: Text(
+                          _loading
+                              ? '…'
+                              : (_isHost && widget.activeSeance != null
+                                  ? 'ENTER SÉANCE'
+                                  : _canJoin
+                                      ? 'JOIN SÉANCE'
+                                      : 'BEGIN SÉANCE'),
+                          style: TextStyle(
+                            fontFamily: GoogleFonts.martianMono().fontFamily,
+                            fontSize: 11,
+                            letterSpacing: 1.98,
+                            color: const Color(0xFFF3E4CF),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    if (_canJoin)
+                      GestureDetector(
+                        onTap: _declineSeance,
+                        child: Text(
+                          'not now',
+                          style: TextStyle(
+                            fontFamily: GoogleFonts.martianMono().fontFamily,
+                            fontSize: 10,
+                            letterSpacing: 1.2,
+                            color: const Color(0x50F3E4CF),
+                          ),
+                        ),
+                      )
+                    else
+                      Text(
+                        'blow it out',
+                        style: TextStyle(
+                          fontFamily: GoogleFonts.martianMono().fontFamily,
+                          fontSize: 10,
+                          letterSpacing: 1.4,
+                          color: const Color(0x80F3E4CF),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LiveBadge extends StatefulWidget {
+  @override
+  State<_LiveBadge> createState() => _LiveBadgeState();
+}
+
+class _LiveBadgeState extends State<_LiveBadge>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1800))
+      ..repeat();
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AnimatedBuilder(
+          animation: _pulse,
+          builder: (_, __) => Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: const Color(0xFF4ADE80),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF4ADE80)
+                      .withValues(alpha: (1.0 - _pulse.value) * 0.5),
+                  blurRadius: 8 * _pulse.value,
+                  spreadRadius: 4 * _pulse.value,
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          'LIVE',
+          style: TextStyle(
+            fontFamily: GoogleFonts.martianMono().fontFamily,
+            fontSize: 9,
+            letterSpacing: 1.8,
+            color: const Color(0xFF7FE0A0),
+          ),
+        ),
+      ],
     );
   }
 }
