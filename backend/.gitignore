@@ -4,3 +4,5 @@ node_modules/
 serviceAccountKey.json
 movie_cache.db
 *.db
+posters/
+uploads/
