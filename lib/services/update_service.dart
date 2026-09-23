@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class UpdateService {
-  static const _currentVersion = '0.4.3';
+  static const _currentVersion = '0.6';
   static const _repo = 'ydlm88/Kuvacult';
 
   static bool _isNewer(String remote, String current) {

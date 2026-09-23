@@ -890,6 +890,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _proactiveTokenRefresh();
       loadTrending();
       // Re-establish WS and pull fresh movie sections in case we missed events while backgrounded.
       if (_activeWatchlistId != null) {
@@ -897,6 +898,23 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         _refreshActiveWatchlist();
       }
     }
+  }
+
+  // Eagerly refreshes the access token on resume so any subsequent API calls
+  // have a valid token even when the 14-minute periodic timer missed a fire.
+  Future<void> _proactiveTokenRefresh() async {
+    try {
+      final stored = await _authService.getStoredSession();
+      if (stored == null) return;
+      final newToken = await _authService.refreshAccessToken(stored.refreshToken);
+      if (newToken == null) return;
+      ApiService.setToken(newToken);
+      await _authService.storeSession(
+        accessToken: newToken,
+        refreshToken: stored.refreshToken,
+        userId: stored.userId,
+      );
+    } catch (_) {}
   }
 
   // Silently re-fetches the active watchlist's movies from the backend and
@@ -1708,6 +1726,24 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
     });
+
+    // On-demand refresh used by ApiService when any request gets a 401.
+    // Fetches a fresh token immediately so the caller can retry without requiring
+    // the user to restart the app.
+    ApiService.onTokenExpired = () async {
+      final stored = await _authService.getStoredSession();
+      if (stored == null) return null;
+      final newToken = await _authService.refreshAccessToken(stored.refreshToken);
+      if (newToken != null) {
+        ApiService.setToken(newToken);
+        await _authService.storeSession(
+          accessToken: newToken,
+          refreshToken: stored.refreshToken,
+          userId: stored.userId,
+        );
+      }
+      return newToken;
+    };
   }
 
   UserAccount _userFromAuthResult(AuthResult result) {

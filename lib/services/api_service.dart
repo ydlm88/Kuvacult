@@ -32,12 +32,37 @@ class ApiService {
 
   static void Function()? onServerDown;
 
+  // Called on 401; should refresh the token and return the new access token,
+  // or null if refresh fails (triggering a logout or re-login prompt upstream).
+  static Future<String?> Function()? onTokenExpired;
+
+  // Injects a fresh Authorization header after a token refresh.
+  static Map<String, String>? _withFreshToken(Map<String, String>? headers) {
+    if (headers == null) return null;
+    return {...headers, if (_token != null) 'Authorization': 'Bearer $_token'};
+  }
+
+  // On a 401 response, attempts one token refresh + retry. Returns the original
+  // response if refresh is unavailable or fails.
+  static Future<http.Response> _retryOn401(
+    http.Response res,
+    Map<String, String>? headers,
+    Future<http.Response> Function(Map<String, String>?) doRetry,
+  ) async {
+    if (res.statusCode != 401 || onTokenExpired == null) return res;
+    final newToken = await onTokenExpired!();
+    if (newToken == null) return res;
+    setToken(newToken);
+    return doRetry(_withFreshToken(headers));
+  }
+
   static Future<http.Response> _get(Uri uri, {
     Map<String, String>? headers,
     Duration timeout = _timeout,
   }) async {
     try {
-      return await http.get(uri, headers: headers).timeout(timeout);
+      final res = await http.get(uri, headers: headers).timeout(timeout);
+      return _retryOn401(res, headers, (h) => http.get(uri, headers: h).timeout(timeout));
     } on SocketException {
       onServerDown?.call();
       rethrow;
@@ -56,7 +81,8 @@ class ApiService {
     Duration timeout = _timeout,
   }) async {
     try {
-      return await http.post(uri, headers: headers, body: body).timeout(timeout);
+      final res = await http.post(uri, headers: headers, body: body).timeout(timeout);
+      return _retryOn401(res, headers, (h) => http.post(uri, headers: h, body: body).timeout(timeout));
     } on SocketException {
       onServerDown?.call();
       rethrow;
@@ -75,7 +101,8 @@ class ApiService {
     Duration timeout = _timeout,
   }) async {
     try {
-      return await http.patch(uri, headers: headers, body: body).timeout(timeout);
+      final res = await http.patch(uri, headers: headers, body: body).timeout(timeout);
+      return _retryOn401(res, headers, (h) => http.patch(uri, headers: h, body: body).timeout(timeout));
     } on SocketException {
       onServerDown?.call();
       rethrow;
@@ -94,7 +121,7 @@ class ApiService {
   }) async {
     try {
       final res = await http.delete(uri, headers: headers).timeout(timeout);
-      return res;
+      return _retryOn401(res, headers, (h) => http.delete(uri, headers: h).timeout(timeout));
     } on SocketException {
       onServerDown?.call();
       rethrow;
