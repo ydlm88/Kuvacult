@@ -1,72 +1,123 @@
-// profile_banner.dart — Full-bleed profile header that tiles watchlist poster images with a gradient scrim overlay.
+// profile_banner.dart — Feathered-seam dissolve banner (design option 4a).
+import 'dart:ui' as ui;
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'app_image.dart';
-import '../theme.dart';
 
-class ProfileBannerWidget extends StatelessWidget {
+/// Four-poster banner: sharp tiles edge-to-edge, bottom-blur bleed,
+/// page-background fade, and subtle film grain.
+class DissolveBanner extends StatelessWidget {
+  const DissolveBanner({super.key, required this.posterUrls, this.height = 340});
   final List<String> posterUrls;
-  final Color avatarColor;
+  final double height;
 
-  const ProfileBannerWidget({
-    super.key,
-    required this.posterUrls,
-    required this.avatarColor,
-  });
+  static const double _blurSigma = 12;
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        if (posterUrls.isEmpty)
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  avatarColor.withAlpha(70),
-                  avatarColor.withAlpha(20),
-                  MC.bg0,
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomCenter,
+    if (posterUrls.isEmpty) {
+      return SizedBox(
+        height: height,
+        width: double.infinity,
+        child: const ColoredBox(color: Color(0xFF0A0806)),
+      );
+    }
+
+    final providers = posterUrls
+        .take(4)
+        .map((u) => CachedNetworkImageProvider(u) as ImageProvider)
+        .toList();
+
+    Widget posterRow() => Row(
+          children: [
+            for (final p in providers)
+              Expanded(
+                child: Image(
+                  image: p,
+                  fit: BoxFit.cover,
+                  alignment: const Alignment(0, -0.4),
+                  height: height,
+                  gaplessPlayback: true,
+                ),
               ),
-            ),
-          )
-        else
-          Row(
-            children: posterUrls
-                .map((url) => Expanded(
-                      child: AppImage(
-                        imageUrl: url,
-                        fit: BoxFit.cover,
-                        width: double.infinity,
-                        height: double.infinity,
-                        fadeInDuration: Duration.zero,
-                        fadeOutDuration: Duration.zero,
-                        errorWidget: (_, __, ___) =>
-                            ColoredBox(color: avatarColor.withAlpha(40)),
-                      ),
-                    ))
-                .toList(),
-          ),
-        Positioned.fill(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
+          ],
+        );
+
+    return RepaintBoundary(
+      child: SizedBox(
+        height: height,
+        width: double.infinity,
+        child: ClipRect(
+          child: Stack(fit: StackFit.expand, children: [
+            // Layer 1 — sharp posters, tiled edge-to-edge.
+            posterRow(),
+
+            // Layer 2 — blurred copy, revealed from 55 % → 85 % top-to-bottom.
+            ShaderMask(
+              blendMode: BlendMode.dstIn,
+              shaderCallback: (r) => const LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [
-                  Colors.black.withAlpha(60),
-                  Colors.transparent,
-                  MC.bg0.withAlpha(210),
-                  MC.bg0,
-                ],
-                stops: const [0.0, 0.3, 0.75, 1.0],
+                colors: [Colors.transparent, Colors.black],
+                stops: [0.55, 0.85],
+              ).createShader(r),
+              child: ImageFiltered(
+                imageFilter: ui.ImageFilter.blur(
+                    sigmaX: _blurSigma,
+                    sigmaY: _blurSigma,
+                    tileMode: TileMode.decal),
+                child: posterRow(),
               ),
             ),
-          ),
+
+            // Layer 3 — fade to page background.
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0x000A0806),
+                    Color(0x000A0806),
+                    Color(0x660A0806),
+                    Color(0xCC0A0806),
+                    Color(0xFF0A0806),
+                  ],
+                  stops: [0, 0.55, 0.75, 0.90, 1.0],
+                ),
+              ),
+            ),
+
+            // Layer 4 — right vignette so stats are always on a dark ground.
+            const IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                    colors: [Colors.transparent, Color(0x80000000)],
+                    stops: [0.50, 1.0],
+                  ),
+                ),
+              ),
+            ),
+
+            // Layer 5 — film grain.
+            IgnorePointer(
+              child: Opacity(
+                opacity: 0.07,
+                child: const DecoratedBox(
+                  decoration: BoxDecoration(
+                    image: DecorationImage(
+                      image: AssetImage('assets/grain.png'),
+                      repeat: ImageRepeat.repeat,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ]),
         ),
-      ],
+      ),
     );
   }
 }

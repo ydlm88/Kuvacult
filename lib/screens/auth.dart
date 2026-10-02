@@ -207,9 +207,9 @@ class _AuthScreenState extends State<AuthScreen> {
               const SizedBox(height: 28),
 
               if (_isRegister) ...[
-                _field('Display name', _nameCtrl),
+                _field('Display name', _nameCtrl, maxLength: 30),
                 const SizedBox(height: 12),
-                _field('Username', _usernameCtrl),
+                _field('Username', _usernameCtrl, maxLength: 20),
                 const SizedBox(height: 12),
               ],
 
@@ -416,6 +416,7 @@ class _AuthScreenState extends State<AuthScreen> {
     String label,
     TextEditingController ctrl, {
     TextInputType? type,
+    int? maxLength,
   }) =>
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -425,8 +426,9 @@ class _AuthScreenState extends State<AuthScreen> {
           TextField(
             controller: ctrl,
             keyboardType: type,
+            maxLength: maxLength,
             style: const TextStyle(color: MC.ink, fontSize: 15),
-            decoration: _inputDecoration(),
+            decoration: _inputDecoration().copyWith(counterText: ''),
           ),
         ],
       );

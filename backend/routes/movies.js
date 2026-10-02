@@ -219,7 +219,29 @@ async function pgGetMovie(id) {
      FROM media WHERE id = $1`,
         [id]
     );
-    return r.rows[0] ? pgRowToImdb(r.rows[0]) : null;
+    if (!r.rows[0]) return null;
+    const row = r.rows[0];
+    if (!isLocalPosterUrl(row.poster_url)) ensurePosterCached(id, row.poster_url);
+    return pgRowToImdb(row);
+}
+
+// Fire-and-forget: ensure a movie's poster is downloaded to disk and the DB
+// poster_url is updated to the local path. Tries TMDB first, OMDB as fallback.
+function ensurePosterCached(id, existingUrl) {
+    if (!id || isLocalPosterUrl(existingUrl)) return;
+    (async () => {
+        try {
+            let posterUrl = existingUrl;
+            if (!posterUrl) {
+                try {
+                    const data = stripTmdbId(await fetchTmdbByImdbId(id));
+                    if (data.primaryImage?.url) posterUrl = data.primaryImage.url;
+                } catch (_) {}
+                if (!posterUrl) posterUrl = omdbPosterUrl(id);
+            }
+            if (posterUrl) await cachePosterBackground(id, posterUrl, pgQuery);
+        } catch (_) {}
+    })();
 }
 
 
@@ -263,13 +285,9 @@ async function enrichResultsInline(titles) {
         };
     });
 
-    const afterPg = list
-        .map((t, i) => ({ t, i }))
-        .filter(({ t }) => !t.plot || !t.directors?.length);
-
     const needOmdb = list
         .map((t, i) => ({ t, i }))
-        .filter(({ t }) => !t.plot || !t.directors?.length)
+        .filter(({ t }) => !t.plot || !t.directors?.length || !t.primaryImage?.url)
         .slice(0, OMDB_INLINE_LIMIT);
 
     if (!needOmdb.length) return list;
@@ -752,15 +770,23 @@ async function runBulkPull() {
             await Promise.allSettled(
                 enrichIds.slice(i, i + BATCH).map(async (id) => {
                     try {
-                        const raw = await omdbJson({ i: id, plot: 'full' });
-                        const full = omdbToImdb(raw);
+                        let full = null;
+                        try {
+                            full = stripTmdbId(await fetchTmdbByImdbId(id));
+                        } catch (_) {
+                            try {
+                                const raw = await omdbJson({ i: id, plot: 'full' });
+                                full = omdbToImdb(raw);
+                                if (!full.primaryImage?.url) full.primaryImage = { url: omdbPosterUrl(id) };
+                            } catch (_) {}
+                        }
+                        if (!full) return;
                         if (isAdultContent(full)) return;
-                        if (!full.primaryImage?.url) full.primaryImage = { url: omdbPosterUrl(id) };
                         cacheTitles([full]);
                         await pgSaveMovie(full, true);
                         stats.omdbById++;
                     } catch (e) {
-                        stats.omdbErrors.push(`omdb-id ${id}: ${e.message}`);
+                        stats.omdbErrors.push(`enrich-id ${id}: ${e.message}`);
                     }
                 })
             );
@@ -819,10 +845,25 @@ async function runEnrichOnly(stats) {
         await Promise.allSettled(
             ids.slice(i, i + BATCH).map(async (id) => {
                 try {
-                    const raw = await omdbJson({ i: id, plot: 'full' });
-                    const full = omdbToImdb(raw);
+                    let full = null;
+                    try {
+                        full = stripTmdbId(await fetchTmdbByImdbId(id));
+                    } catch (_) {
+                        try {
+                            const raw = await omdbJson({ i: id, plot: 'full' });
+                            full = omdbToImdb(raw);
+                            if (!full.primaryImage?.url) full.primaryImage = { url: omdbPosterUrl(id) };
+                        } catch (e) {
+                            const msg = e.message || '';
+                            if (msg.includes('rate_limit') || msg.startsWith('omdb_4')) {
+                                stats.errors.push(`${id}: ${msg}`);
+                            } else {
+                                stats.notFound++;
+                            }
+                        }
+                    }
+                    if (!full) return;
                     if (isAdultContent(full)) return;
-                    if (!full.primaryImage?.url) full.primaryImage = { url: omdbPosterUrl(id) };
                     cacheTitles([full]);
                     await pgSaveMovie(full, true);
                     stats.enriched++;
@@ -830,12 +871,7 @@ async function runEnrichOnly(stats) {
                     if (full.plot) stats.withSynopsis++;
                     if (full.primaryImage?.url) stats.withPoster++;
                 } catch (e) {
-                    const msg = e.message || '';
-                    if (msg.includes('rate_limit') || msg.startsWith('omdb_4')) {
-                        stats.errors.push(`${id}: ${msg}`);
-                    } else {
-                        stats.notFound++;
-                    }
+                    stats.errors.push(`${id}: ${e.message}`);
                 }
             })
         );

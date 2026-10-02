@@ -71,12 +71,15 @@ router.post('/register', authLimiter, async (req, res) => {
         if (password.length < 8) {
             return res.status(400).json({ error: 'Password must be at least 8 characters' });
         }
-        if (username.trim().length < 2 || !/^[a-zA-Z0-9_]+$/.test(username.trim())) {
+        if (username.trim().length < 2 || username.trim().length > 20 || !/^[a-zA-Z0-9_]+$/.test(username.trim())) {
             return res
                 .status(400)
                 .json({
-                    error: 'Username must be 2+ characters: letters, numbers, underscores only',
+                    error: 'Username must be 2–20 characters: letters, numbers, underscores only',
                 });
+        }
+        if (displayName.trim().length > 30) {
+            return res.status(400).json({ error: 'Display name must be 30 characters or fewer' });
         }
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
             return res.status(400).json({ error: 'Invalid email address' });

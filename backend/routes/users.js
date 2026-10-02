@@ -97,6 +97,9 @@ module.exports = function (rooms, broadcastToUser) {
         try {
             if (req.user.sub !== req.params.id) return res.status(403).json({ error: 'Forbidden' });
             const { displayName, avatarUrl, roomKey, avatarBg, bannerUrls } = req.body;
+            if (displayName !== undefined && displayName.trim().length > 30) {
+                return res.status(400).json({ error: 'Display name must be 30 characters or fewer' });
+            }
             const sets = ['updated_at = NOW()'];
             const vals = [];
             let i = 1;

@@ -14,7 +14,7 @@ import '../services/api_service.dart';
 import '../config.dart';
 import '../models.dart';
 import '../theme.dart';
-import '../widgets/profile_banner.dart';
+import '../widgets/profile_banner.dart' show DissolveBanner;
 import '../widgets/review_text.dart';
 import '../widgets/sign_in_sheet.dart';
 import 'detail.dart';
@@ -24,6 +24,23 @@ import 'letterboxd_import.dart';
 import 'invites_screen.dart';
 import 'onboarding.dart';
 import '../utils/top_toast.dart';
+
+enum _ProfileReviewSort { recent, highest, lowest }
+
+PopupMenuItem<_ProfileReviewSort> _profileSortItem(
+    _ProfileReviewSort value, String label, _ProfileReviewSort current) =>
+    PopupMenuItem<_ProfileReviewSort>(
+      value: value,
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      child: Row(
+        children: [
+          Expanded(child: Text(label,
+              style: TextStyle(color: current == value ? MC.accent1 : MC.ink, fontSize: 13))),
+          if (current == value) const Icon(Icons.check_rounded, size: 13, color: MC.accent1),
+        ],
+      ),
+    );
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -38,13 +55,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   int _reviewPage = 0;
   String _reviewSearch = '';
+  _ProfileReviewSort _reviewSort = _ProfileReviewSort.recent;
   final _reviewSearchCtrl = TextEditingController();
+  final _reviewSortKey = GlobalKey();
 
   int _watchlistPage = 0;
   String _watchlistSearch = '';
   final _watchlistSearchCtrl = TextEditingController();
 
-  // Cached so ProfileBannerWidget doesn't get a new list identity every build
+  // Cached so DissolveBanner doesn't get a new list identity every build
   List<String> _bannerPosters = const [];
   String _bannerCacheKey = '';
   List<String>? _lastCustomBanners;
@@ -70,9 +89,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
         .toList();
     final reviews = state.reviewsForUser(user?.id ?? '');
     const int _kPerPage = 5;
-    final filteredReviews = _reviewSearch.isEmpty
-        ? reviews
+    var filteredReviews = _reviewSearch.isEmpty
+        ? List<Review>.from(reviews)
         : reviews.where((r) => r.movieTitle.toLowerCase().contains(_reviewSearch.toLowerCase())).toList();
+    if (_reviewSort == _ProfileReviewSort.highest) filteredReviews.sort((a, b) => b.stars.compareTo(a.stars));
+    if (_reviewSort == _ProfileReviewSort.lowest)  filteredReviews.sort((a, b) => a.stars.compareTo(b.stars));
     final reviewPageCount = filteredReviews.isEmpty ? 1 : (filteredReviews.length / _kPerPage).ceil();
     final reviewPage = _reviewPage.clamp(0, reviewPageCount - 1);
     final visibleReviews = filteredReviews.skip(reviewPage * _kPerPage).take(_kPerPage).toList();
@@ -89,18 +110,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     final topPad = MediaQuery.of(context).padding.top;
 
-    const avatarColors = [
-      Color(0xFFF6C453), Color(0xFF7AB9F2),
-      Color(0xFFE98AA8), Color(0xFF85C9A8), Color(0xFFB39DDB),
-    ];
-    final avatarColor = user != null
-        ? avatarColors[user.id.hashCode.abs() % avatarColors.length]
-        : const Color(0xFFF6C453);
-
     final customBanners = state.customBannerUrls;
     if (customBanners != null) {
       if (!identical(customBanners, _lastCustomBanners)) {
-        _bannerPosters = customBanners;
+        _bannerPosters = customBanners.take(4).toList();
         _lastCustomBanners = customBanners;
       }
     } else {
@@ -129,128 +142,113 @@ class _ProfileScreenState extends State<ProfileScreen> {
       body: CustomScrollView(
         slivers: [
           SliverToBoxAdapter(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  height: 160 + 44,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Positioned(
-                        top: 0, left: 0, right: 0, height: 160,
-                        child: ProfileBannerWidget(
-                          posterUrls: _bannerPosters,
-                          avatarColor: avatarColor,
-                        ),
-                      ),
-
-                      Positioned(
-                        top: topPad + 12, right: 16,
-                        child: Row(
-                          children: [
-                            GestureDetector(
-                              onTap: _refreshing
-                                  ? null
-                                  : () async {
-                                      setState(() => _refreshing = true);
-                                      await context.read<AppState>().refreshProfile();
-                                      if (mounted) setState(() => _refreshing = false);
-                                    },
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: MC.bg0.withAlpha(200),
-                                  border: Border.all(color: MC.line, width: 0.5),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: _refreshing
-                                    ? const SizedBox(
-                                        width: 15, height: 15,
-                                        child: CircularProgressIndicator(
-                                            color: MC.mute, strokeWidth: 1.5))
-                                    : const Icon(Icons.refresh_rounded,
-                                        color: MC.mute, size: 15),
-                              ),
-                            ),
-
-                            const SizedBox(width: 8),
-                            GestureDetector(
-                              onTap: () => _showEditProfile(context, user),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: MC.bg0.withAlpha(200),
-                                  border: Border.all(color: MC.line, width: 0.5),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: const Text('Edit',
-                                    style: TextStyle(color: MC.mute, fontSize: 13)),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      Positioned(
-                        top: 116, left: 20,
+            child: SizedBox(
+              height: 160 + 44,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned(
+                    top: 0, left: 0, right: 0, bottom: 0,
+                    child: DissolveBanner(posterUrls: _bannerPosters, height: 160 + 44),
+                  ),
+                  Positioned(
+                    top: topPad + 12, right: 16,
+                    child: Row(children: [
+                      GestureDetector(
+                        onTap: _refreshing ? null : () async {
+                          setState(() => _refreshing = true);
+                          await context.read<AppState>().refreshProfile();
+                          if (mounted) setState(() => _refreshing = false);
+                        },
                         child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: MC.bg0.withAlpha(200),
+                            border: Border.all(color: MC.line, width: 0.5),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: _refreshing
+                              ? const SizedBox(width: 15, height: 15,
+                                  child: CircularProgressIndicator(color: MC.mute, strokeWidth: 1.5))
+                              : const Icon(Icons.refresh_rounded, color: MC.mute, size: 15),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        onTap: () => _showEditProfile(context, user),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: MC.bg0.withAlpha(200),
+                            border: Border.all(color: MC.line, width: 0.5),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Text('Edit', style: TextStyle(color: MC.mute, fontSize: 13)),
+                        ),
+                      ),
+                    ]),
+                  ),
+                  // Bottom row: avatar · name/handle · stats
+                  Positioned(
+                    left: 20, right: 20, bottom: 14,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Container(
                           decoration: const BoxDecoration(
                             shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(color: MC.bg0, spreadRadius: 3),
+                              BoxShadow(color: Color(0x80000000), blurRadius: 20, offset: Offset(0, 8)),
+                            ],
                           ),
                           child: _ProfileAvatar(user: user, size: 88),
                         ),
-                      ),
-
-                      Positioned(
-                        bottom: 6, right: 20,
-                        child: Row(
+                        const SizedBox(width: 16),
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _InlineStat(n: watched.length, label: 'Films'),
-                            const SizedBox(width: 20),
-                            _InlineStat(n: reviews.length, label: 'Reviews'),
-                            const SizedBox(width: 20),
-                            _InlineStat(n: state.myFollowerCount, label: 'Followers'),
-                            const SizedBox(width: 20),
-                            _InlineStat(n: state.myFollowingCount, label: 'Following'),
+                            Text(displayName,
+                                style: MT.display(size: 26, letterSpacing: -0.6).copyWith(
+                                  shadows: const [Shadow(color: Color(0xCC000000), blurRadius: 10)],
+                                )),
+                            if (username.isNotEmpty)
+                              Text('@$username',
+                                  style: MT.mono(size: 11, letterSpacing: 0.5, color: MC.accent1).copyWith(
+                                    shadows: const [Shadow(color: Color(0xCC000000), blurRadius: 8)],
+                                  )),
                           ],
                         ),
-                      ),
-                    ],
+                        const Spacer(),
+                        Row(children: [
+                          _InlineStat(n: watched.length,         label: 'Films'),
+                          const SizedBox(width: 20),
+                          _InlineStat(n: reviews.length,         label: 'Reviews'),
+                          const SizedBox(width: 20),
+                          _InlineStat(n: state.myFollowerCount,  label: 'Followers'),
+                          const SizedBox(width: 20),
+                          _InlineStat(n: state.myFollowingCount, label: 'Following'),
+                        ]),
+                      ],
+                    ),
                   ),
-                ),
-
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(displayName,
-                          style: MT.display(size: 26, letterSpacing: -0.6)),
-                      if (username.isNotEmpty)
-                        Text('@$username',
-                            style: MT.mono(
-                                size: 11, letterSpacing: 0.5, color: MC.accent1)),
-                    ],
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
 
           SliverToBoxAdapter(
-            child: Container(
-              margin: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-              height: 40,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+              child: Container(
+              height: 36,
               decoration: BoxDecoration(
                 color: MC.bg1,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(10),
               ),
               child: Row(
-                children:
-                    ['Reviews', 'Watchlists', 'Watched'].asMap().entries.map((e) {
+                children: ['Reviews', 'Watchlists', 'Watched'].asMap().entries.map((e) {
                   final isActive = _tab == e.key;
                   return Expanded(
                     child: GestureDetector(
@@ -258,23 +256,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: Container(
                         decoration: BoxDecoration(
                           color: isActive ? MC.bg2 : Colors.transparent,
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                         alignment: Alignment.center,
                         child: Text(
                           e.value.toUpperCase(),
-                          style: MT.mono(
-                            size: 10,
-                            letterSpacing: 1.5,
-                            color: isActive ? MC.ink : MC.dim,
-                            weight: FontWeight.w600,
-                          ),
+                          style: MT.mono(size: 10, letterSpacing: 1.5, color: isActive ? MC.ink : MC.dim, weight: FontWeight.w600),
                         ),
                       ),
                     ),
                   );
                 }).toList(),
               ),
+            ),
             ),
           ),
 
@@ -291,10 +285,79 @@ class _ProfileScreenState extends State<ProfileScreen> {
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-                  child: _ProfileSearchField(
-                    ctrl: _reviewSearchCtrl,
-                    hint: 'Search reviews…',
-                    onChanged: (v) => setState(() { _reviewSearch = v; _reviewPage = 0; }),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _ProfileSearchField(
+                          ctrl: _reviewSearchCtrl,
+                          hint: 'Search reviews…',
+                          onChanged: (v) => setState(() { _reviewSearch = v; _reviewPage = 0; }),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text('SORT', style: TextStyle(color: MC.dim, fontSize: 10, letterSpacing: 1.2)),
+                          const SizedBox(width: 6),
+                          GestureDetector(
+                            onTap: () async {
+                              final box = _reviewSortKey.currentContext?.findRenderObject() as RenderBox?;
+                              if (box == null) return;
+                              final offset = box.localToGlobal(Offset.zero);
+                              final size   = box.size;
+                              final result = await showMenu<_ProfileReviewSort>(
+                                context: context,
+                                color: MC.bg1,
+                                elevation: 6,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                position: RelativeRect.fromLTRB(
+                                  offset.dx,
+                                  offset.dy + size.height + 4,
+                                  offset.dx + size.width,
+                                  0,
+                                ),
+                                items: [
+                                  _profileSortItem(_ProfileReviewSort.recent,  'Most recent',   _reviewSort),
+                                  _profileSortItem(_ProfileReviewSort.highest, 'Highest rated', _reviewSort),
+                                  _profileSortItem(_ProfileReviewSort.lowest,  'Lowest rated',  _reviewSort),
+                                ],
+                              );
+                              if (result != null) setState(() { _reviewSort = result; _reviewPage = 0; });
+                            },
+                            child: Container(
+                              key: _reviewSortKey,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: _reviewSort != _ProfileReviewSort.recent ? MC.accent1.withAlpha(25) : MC.bg1,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: _reviewSort != _ProfileReviewSort.recent ? MC.accent1 : MC.line,
+                                  width: 0.5,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    _reviewSort == _ProfileReviewSort.highest ? 'Highest rated'
+                                      : _reviewSort == _ProfileReviewSort.lowest ? 'Lowest rated'
+                                      : 'Most recent',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: _reviewSort != _ProfileReviewSort.recent ? MC.accent1 : MC.mute,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Icon(Icons.keyboard_arrow_down_rounded, size: 14,
+                                      color: _reviewSort != _ProfileReviewSort.recent ? MC.accent1 : MC.mute),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -1087,14 +1150,14 @@ class _InlineStat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const shadow = Shadow(color: Color(0xCC000000), blurRadius: 8);
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Text(_fmt(n), style: MT.display(size: 19)),
+        Text(_fmt(n), style: MT.display(size: 19).copyWith(shadows: const [shadow])),
         const SizedBox(height: 3),
-        Text(label.toUpperCase(),
-            style: MT.mono(size: 9, letterSpacing: 1, color: MC.dim)),
+        Text(label.toUpperCase(), style: MT.mono(size: 9, letterSpacing: 1, color: MC.dim).copyWith(shadows: const [shadow])),
       ],
     );
   }
@@ -1344,12 +1407,14 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
             const SizedBox(height: 8),
             TextField(
               controller: _nameCtrl,
+              maxLength: 30,
               style: const TextStyle(color: MC.ink, fontSize: 16),
               decoration: InputDecoration(
                 hintText: 'Your name…',
                 hintStyle: const TextStyle(color: MC.dim),
                 filled: true,
                 fillColor: MC.bg2,
+                counterText: '',
                 contentPadding: const EdgeInsets.symmetric(
                     horizontal: 16, vertical: 14),
                 border: OutlineInputBorder(

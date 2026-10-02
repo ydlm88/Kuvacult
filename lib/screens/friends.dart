@@ -335,22 +335,26 @@ class _UserRow extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: user.avatarBg,
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              user.displayName.isNotEmpty
-                  ? user.displayName[0].toUpperCase()
-                  : '?',
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-                fontSize: 16,
+          GestureDetector(
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => FriendProfileScreen(userId: user.id))),
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: user.avatarBg,
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                user.displayName.isNotEmpty
+                    ? user.displayName[0].toUpperCase()
+                    : '?',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                ),
               ),
             ),
           ),
