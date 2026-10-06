@@ -52,8 +52,8 @@ class _DetailScreenState extends State<DetailScreen> {
     _loadWatchers();
   }
 
-  // If the movie came from an OMDB search stub it will have no rating,
-  // runtime, or synopsis. Fetch full details by IMDb ID in the background.
+  // If the movie came from a search stub it will have no rating,
+  // runtime, or synopsis. Fetch full details in the background.
   Future<void> _maybeEnrich() async {
     final m = widget.movie;
     if (m.rating > 0 || m.runtime > 0 || m.synopsis.isNotEmpty) return;

@@ -234,7 +234,7 @@ class _LetterboxdImportScreenState extends State<LetterboxdImportScreen> {
           const SizedBox(height: 24),
           Text('Looking up your movies…', style: MT.display(size: 18)),
           const SizedBox(height: 8),
-          const Text('Checking IMDb, OMDB, and our catalog.',
+          const Text('Checking our catalog.',
               style: TextStyle(color: MC.mute, fontSize: 13)),
           const SizedBox(height: 4),
           const Text('This may take a minute.',

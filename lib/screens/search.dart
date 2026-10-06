@@ -147,8 +147,6 @@ class _SearchScreenState extends State<SearchScreen> {
                         child: const Icon(Icons.close_rounded,
                             color: MC.dim, size: 16),
                       ),
-                    const SizedBox(width: 4),
-                    Text('IMDb', style: MT.mono(size: 10, letterSpacing: 1)),
                   ],
                 ),
               ),

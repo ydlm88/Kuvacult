@@ -89,7 +89,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final _notifService = UserNotificationService();
   StreamSubscription<Map<String, dynamic>>? _notifSub;
 
-  final _imdb = MediaData();
+  final _media = MediaData();
 
   final List<Watchlist> _watchlists = [];
   String? _activeWatchlistId;
@@ -973,7 +973,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _genrePageToken = null;
     notifyListeners();
     try {
-      final (movies, nextToken) = await _imdb.fetchByGenre(genre);
+      final (movies, nextToken) = await _media.fetchByGenre(genre);
       _genreResults = movies;
       _genrePageToken = nextToken;
     } catch (_) {
@@ -990,7 +990,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _genreLoadingMore = true;
     notifyListeners();
     try {
-      final (movies, nextToken) = await _imdb.fetchByGenre(
+      final (movies, nextToken) = await _media.fetchByGenre(
         _selectedGenre!,
         pageToken: _genrePageToken,
       );
@@ -1111,7 +1111,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
     try {
       final (movies, nextToken) =
-          await _imdb.searchTitles(_searchQuery, pageToken: pageToken);
+          await _media.searchTitles(_searchQuery, pageToken: pageToken);
       if (myGen != _searchGeneration) return; // superseded by a newer query
       _searchNextPageToken = nextToken;
       // Cache only the API portion so personal DB is always re-computed live.
@@ -1171,7 +1171,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  // Loads popular titles from the IMDb API for the onboarding collage and search/review
+  // Loads popular titles for the onboarding collage and search/review
   // trending rails. TTL-gated so warm starts and app-resume don't hammer the API.
   // Falls back to cached data on failure so the UI never goes blank.
   Future<void> loadTrending() async {
@@ -1185,8 +1185,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
     try {
       final results = await Future.wait([
-        _imdb.fetchTrending(),
-        _imdb.fetchActiveMovies(),
+        _media.fetchTrending(),
+        _media.fetchActiveMovies(),
       ]);
       final trending = results[0];
       final catalog = results[1];
@@ -1360,7 +1360,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       Movie toSave = movie;
       if (movie.rating == 0 && movie.runtime == 0 && movie.synopsis.isEmpty) {
         try {
-          final enriched = await _imdb.fetchTitle(movie.id);
+          final enriched = await _media.fetchTitle(movie.id);
           toSave = enriched;
           final idx = target.movies.indexWhere((m) => m.id == movie.id);
           if (idx != -1) {
@@ -2169,7 +2169,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         final m = wl.movies[i];
         if (m.poster.imageUrl != null || m.id.isEmpty) continue;
         try {
-          final fetched = await _imdb.fetchTitle(m.id);
+          final fetched = await _media.fetchTitle(m.id);
           if (fetched.poster.imageUrl != null) {
             wl.movies[i] = Movie(
               id: m.id, title: m.title, year: m.year,

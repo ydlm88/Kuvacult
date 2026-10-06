@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../theme.dart';
 import '../models.dart';
 import '../app_state.dart';
+import '../widgets/scroll_refresh.dart';
 import '../widgets/avatar.dart';
 import '../widgets/poster.dart';
 import '../widgets/chip_filter.dart';
@@ -38,7 +39,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
 
     return Scaffold(
       backgroundColor: MC.bg0,
-      body: RefreshIndicator(
+      body: ScrollWheelRefreshIndicator(
         color: MC.accent1,
         backgroundColor: MC.bg1,
         onRefresh: () => context.read<AppState>().refreshActivity(),

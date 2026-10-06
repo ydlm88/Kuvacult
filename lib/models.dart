@@ -482,7 +482,7 @@ class BlackjackState {
 }
 
 class WatchedMovie {
-  final String id;       // IMDb ID
+  final String id;       // movie ID
   final String? posterUrl;
   final String title;
   final int year;

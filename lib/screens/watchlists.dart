@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import '../widgets/app_image.dart';
+import '../widgets/scroll_refresh.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../theme.dart';
@@ -59,7 +60,7 @@ class _WatchlistsScreenState extends State<WatchlistsScreen> {
 
     return Scaffold(
       backgroundColor: MC.bg0,
-      body: RefreshIndicator(
+      body: ScrollWheelRefreshIndicator(
         color: MC.accent1,
         backgroundColor: MC.bg1,
         onRefresh: () => _refresh(state),

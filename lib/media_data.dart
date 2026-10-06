@@ -22,9 +22,9 @@ class MediaData {
     return (titles.map(_titleToMovie).toList(), nextToken);
   }
 
-  Future<Movie> fetchTitle(String imdbId) async {
+  Future<Movie> fetchTitle(String movieId) async {
     final res = await http
-        .get(Uri.parse('$_base/movies/$imdbId'))
+        .get(Uri.parse('$_base/movies/$movieId'))
         .timeout(_timeout);
     if (res.statusCode != 200) throw Exception('Fetch failed: ${res.statusCode}');
     final data = jsonDecode(res.body) as Map<String, dynamic>;

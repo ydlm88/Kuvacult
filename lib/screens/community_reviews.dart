@@ -1,5 +1,6 @@
 // community_reviews.dart — Community hub screen showing trending movies, popular reviews, top watchlists, and top reviewers, with explore drill-downs and an activity/notification drawer.
 import 'package:flutter/gestures.dart';
+import '../widgets/scroll_refresh.dart';
 import '../widgets/app_image.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -102,7 +103,7 @@ class _CommunityReviewsScreenState extends State<CommunityReviewsScreen> {
 
     return Scaffold(
       backgroundColor: MC.bg0,
-      body: RefreshIndicator(
+      body: ScrollWheelRefreshIndicator(
         color: MC.kuvacultScore,
         backgroundColor: MC.bg1,
         onRefresh: () => Future.wait([
