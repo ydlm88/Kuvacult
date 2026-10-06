@@ -70,6 +70,14 @@ mixin ChalkBeat<T extends StatefulWidget> on State<T> {
     });
   }
 
+  void stopChalkBeat() {
+    _boil?.cancel();
+    _jitter?.cancel();
+    _boil = null;
+    _jitter = null;
+    if (mounted) setState(() { _seedIndex = 0; _jitterIndex = 0; });
+  }
+
   @override
   void dispose() {
     _boil?.cancel();

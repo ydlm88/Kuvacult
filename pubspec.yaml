@@ -22,6 +22,8 @@ dependencies:
   web_socket_channel: ^3.0.1
   # File picker — lets users select files (ZIP/CSV) for Letterboxd import
   file_picker: ^8.1.7
+  # Drag-and-drop file target for Windows/macOS — used on the import page
+  desktop_drop: ^0.4.4
   # Disk-backed image cache — images persist between sessions, eliminates carousel reloads
   cached_network_image: ^3.4.1
   # Opens URLs in the default browser — used for the update banner link

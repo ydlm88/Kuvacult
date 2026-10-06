@@ -79,7 +79,7 @@ module.exports = function (rooms, broadcastToUser) {
             res.json({
                 id: data.id,
                 username: data.username,
-                displayName: isSelf || isFriend ? data.display_name : null,
+                displayName: data.display_name,
                 avatarUrl: data.avatar_url,
                 avatarBg: data.avatar_bg,
                 friendIds: data.friend_ids ?? [],

@@ -143,9 +143,14 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     final reviews       = state.reviewsForUser(widget.userId);
     final watchedMovies = state.watchedMoviesForUser(widget.userId);
 
-    final displayName = _profile?['displayName'] as String? ??
-        (widget.initialName.isNotEmpty ? widget.initialName : widget.userId);
     final username = _profile?['username'] as String? ?? '';
+    final displayName = (_profile?['displayName'] as String?)?.isNotEmpty == true
+        ? _profile!['displayName'] as String
+        : widget.initialName.isNotEmpty
+            ? widget.initialName
+            : username.isNotEmpty
+                ? username
+                : widget.userId;
 
     final rawAvatarUrl = _profile?['avatarUrl'] as String?;
     final avatarUrl = rawAvatarUrl != null && rawAvatarUrl.isNotEmpty
