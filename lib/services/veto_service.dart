@@ -11,19 +11,39 @@ class VetoEvent {
 }
 
 class VetoService {
-  static String get _wsBase =>
-      Config.wsBase;
+  static String get _wsBase => Config.wsBase;
 
   WebSocketChannel? _channel;
-  final _controller = StreamController<VetoEvent>.broadcast();
+  String? _watchlistId;
+  int _generation = 0;
+  Timer? _pingTimer;
+  Timer? _reconnectTimer;
 
+  final _controller = StreamController<VetoEvent>.broadcast();
   Stream<VetoEvent> get events => _controller.stream;
 
   void connect(String watchlistId) {
+    _watchlistId = watchlistId;
+    _reconnect();
+  }
+
+  void _reconnect() {
+    if (_watchlistId == null) return;
     _channel?.sink.close();
+    _pingTimer?.cancel();
+    _reconnectTimer?.cancel();
+
+    final watchlistId = _watchlistId!;
+    final gen = ++_generation;
+
     _channel = WebSocketChannel.connect(
       Uri.parse('$_wsBase?watchlistId=$watchlistId'),
     );
+
+    _channel!.ready.catchError((_) {
+      if (_watchlistId == watchlistId && _generation == gen) _scheduleReconnect();
+    });
+
     _channel!.stream.listen(
       (raw) {
         try {
@@ -31,10 +51,29 @@ class VetoService {
           _controller.add(VetoEvent(msg['type'] as String, msg));
         } catch (_) {}
       },
-      onError: (_) {},
-      onDone: () {},
+      onError: (_) {
+        if (_watchlistId == watchlistId && _generation == gen) _scheduleReconnect();
+      },
+      onDone: () {
+        if (_watchlistId == watchlistId && _generation == gen) _scheduleReconnect();
+      },
       cancelOnError: false,
     );
+
+    // Keep connection alive — Cloudflare Tunnel has ~100s idle timeout
+    _pingTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      try { _channel?.sink.add('{"type":"ping"}'); } catch (_) {}
+    });
+  }
+
+  void _scheduleReconnect() {
+    _pingTimer?.cancel();
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(const Duration(seconds: 3), _reconnect);
+  }
+
+  void _send(Map<String, dynamic> msg) {
+    _channel?.sink.add(jsonEncode(msg));
   }
 
   void createLobby({
@@ -96,11 +135,12 @@ class VetoService {
     _send({'type': 'veto_reset'});
   }
 
-  void _send(Map<String, dynamic> msg) {
-    _channel?.sink.add(jsonEncode(msg));
-  }
-
   void disconnect() {
+    _watchlistId = null;
+    _pingTimer?.cancel();
+    _reconnectTimer?.cancel();
+    _pingTimer = null;
+    _reconnectTimer = null;
     _channel?.sink.close();
     _channel = null;
   }

@@ -349,10 +349,34 @@ async function handleMessage(watchlistId, msg) {
         if (msg.hostId !== session.pickerId) return;
         if (session.lobbyPlayers.length < 2) return;
         await updateSession(watchlistId, { status: 'picking' });
+        // Fetch authoritative movie list from DB so all clients pick from identical data
+        // regardless of local WS sync state.
+        const { rows: movieRows } = await query(
+            `SELECT m.id, m.title, m.year, m.section, m.stream_id, m.added_by,
+                    m.stars, m.notes, m.added_at, m.watched_by,
+                    CASE WHEN m.runtime > 0 THEN m.runtime ELSE COALESCE(med.runtime, 0) END AS runtime,
+                    CASE WHEN m.rating  > 0 THEN m.rating  ELSE COALESCE(med.rating,  0) END AS rating,
+                    CASE WHEN m.genres IS DISTINCT FROM '[]'::jsonb THEN m.genres ELSE COALESCE(med.genres, '[]'::jsonb) END AS genres,
+                    CASE WHEN COALESCE(m.director,'') <> '' THEN m.director ELSE COALESCE(med.director,'') END AS director,
+                    CASE WHEN COALESCE(m.synopsis,'') <> '' THEN m.synopsis ELSE COALESCE(med.synopsis,'') END AS synopsis,
+                    COALESCE(NULLIF(m.image_url,''), med.poster_url) AS image_url
+             FROM movies m LEFT JOIN media med ON med.id = m.id
+             WHERE m.watchlist_id = $1 ORDER BY m.added_at ASC`,
+            [watchlistId]
+        );
+        const movies = movieRows.map(m => ({
+            id: m.id, watchlistId, title: m.title, year: m.year,
+            runtime: m.runtime, rating: m.rating, genres: m.genres ?? [],
+            director: m.director, streamId: m.stream_id, addedBy: m.added_by,
+            section: m.section, synopsis: m.synopsis, imageUrl: m.image_url,
+            stars: m.stars ?? {}, notes: m.notes ?? [], watchedBy: m.watched_by ?? [],
+            addedAt: m.added_at,
+        }));
         broadcast(watchlistId, {
             type: 'veto_picking_started',
             pickCount: session.pickCount,
             lobbyPlayers: session.lobbyPlayers,
+            movies,
         });
 
         // veto_add_picks — serialized per-watchlist to prevent race conditions

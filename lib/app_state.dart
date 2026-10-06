@@ -17,6 +17,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   bool _isLoggedIn = false;
   bool _isGuest = false;
   bool _isServerDown = false;
+  bool _isRestoring = false;
   UserAccount? _currentUser;
 
   Map<String, bool> _gridPrefs = {};
@@ -70,7 +71,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   UserAccount? get currentUser => _currentUser;
 
   void markServerDown() {
-    if (_isServerDown) return;
+    if (_isServerDown || _isRestoring) return;
     _isServerDown = true;
     notifyListeners();
   }
@@ -873,8 +874,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   AppState() {
     WidgetsBinding.instance.addObserver(this);
     ApiService.onServerDown = markServerDown;
-    _wlService.onServerDown = markServerDown;
-    _notifService.onServerDown = markServerDown;
     loadTrending();
     _loadGridPrefs();
     _loadBannerUrls();
@@ -1647,67 +1646,78 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> tryRestoreSession() async {
-    final stored = await _authService.getStoredSession();
-    if (stored == null) return;
-
-    // Refresh the access token — 15min TTL means it's often expired on cold start.
-    final newToken = await _authService.refreshAccessToken(stored.refreshToken);
-    if (newToken == null) {
-      await _authService.clearSession();
-      return;
-    }
-    ApiService.setToken(newToken);
-    await _authService.storeSession(
-      accessToken: newToken,
-      refreshToken: stored.refreshToken,
-      userId: stored.userId,
-    );
-
-    _isLoggedIn = true;
-    _isGuest = false;
+    _isRestoring = true;
     try {
-      final userData = await ApiService.fetchUser(stored.userId, requesterId: stored.userId);
-      _currentUser = UserAccount(
-        id: stored.userId,
-        username: userData['username'] as String? ?? '',
-        email: '',
-        displayName: userData['displayName'] as String? ?? '',
-        avatarBg: _avatarColor(stored.userId),
-        avatarUrl: userData['avatarUrl'] as String?,
-        roomKey: userData['roomKey'] as String?,
-      );
-      _currentUser!.friendIds = (userData['friendIds'] as List? ?? []).cast<String>();
-      // Sync banner URLs from server — authoritative for cross-device consistency
-      final serverBanner = (userData['bannerUrls'] as List?)?.cast<String>();
-      if (serverBanner != null) {
-        _customBannerUrls = serverBanner.isEmpty ? null : serverBanner;
-        if (serverBanner.isEmpty) {
-          await _storage.delete(key: 'banner_urls_v1');
-        } else {
-          await _storage.write(key: 'banner_urls_v1', value: jsonEncode(serverBanner));
-        }
+      final stored = await _authService.getStoredSession();
+      if (stored == null) return;
+
+      // Refresh the access token — 15min TTL means it's often expired on cold start.
+      final newToken = await _authService.refreshAccessToken(stored.refreshToken);
+      if (newToken == null) {
+        await _authService.clearSession();
+        return;
       }
-    } catch (_) {
-      _currentUser = UserAccount(
-        id: stored.userId,
-        username: '',
-        email: '',
-        displayName: '',
-        avatarBg: _avatarColor(stored.userId),
+      ApiService.setToken(newToken);
+      await _authService.storeSession(
+        accessToken: newToken,
+        refreshToken: stored.refreshToken,
+        userId: stored.userId,
       );
+
+      _isLoggedIn = true;
+      _isGuest = false;
+      try {
+        final userData = await ApiService.fetchUser(stored.userId, requesterId: stored.userId);
+        _currentUser = UserAccount(
+          id: stored.userId,
+          username: userData['username'] as String? ?? '',
+          email: '',
+          displayName: userData['displayName'] as String? ?? '',
+          avatarBg: _avatarColor(stored.userId),
+          avatarUrl: userData['avatarUrl'] as String?,
+          roomKey: userData['roomKey'] as String?,
+        );
+        _currentUser!.friendIds = (userData['friendIds'] as List? ?? []).cast<String>();
+        // Sync banner URLs from server — authoritative for cross-device consistency
+        final serverBanner = (userData['bannerUrls'] as List?)?.cast<String>();
+        if (serverBanner != null) {
+          _customBannerUrls = serverBanner.isEmpty ? null : serverBanner;
+          if (serverBanner.isEmpty) {
+            await _storage.delete(key: 'banner_urls_v1');
+          } else {
+            await _storage.write(key: 'banner_urls_v1', value: jsonEncode(serverBanner));
+          }
+        }
+      } catch (_) {
+        _currentUser = UserAccount(
+          id: stored.userId,
+          username: '',
+          email: '',
+          displayName: '',
+          avatarBg: _avatarColor(stored.userId),
+        );
+      }
+      _scheduleTokenRefresh(stored.refreshToken);
+      notifyListeners();
+
+      // All five are independent — run in parallel. Each swallows its own errors.
+      await Future.wait([
+        _loadWatchlists(),
+        _loadFriendRequests(),
+        _loadFriends(),
+        loadFollowing(),
+        _loadInvites(),
+      ]);
+
+      // Must follow _loadWatchlists — _syncWatchedSections reads _watchlists.
+      _connectNotifications();
+      unawaited(refreshAvailableSeances());
+      unawaited(refreshVetoInvites());
+      _userWatchedLoadedAt.remove(_currentUser!.id);
+      await _loadMyWatchedMovies();
+    } finally {
+      _isRestoring = false;
     }
-    _scheduleTokenRefresh(stored.refreshToken);
-    notifyListeners();
-    await _loadWatchlists();
-    unawaited(refreshAvailableSeances());
-    unawaited(refreshVetoInvites());
-    await _loadFriendRequests();
-    await _loadFriends();
-    await loadFollowing();
-    await _loadInvites();
-    _connectNotifications();
-    _userWatchedLoadedAt.remove(_currentUser!.id);
-    await _loadMyWatchedMovies();
   }
 
   void _scheduleTokenRefresh(String refreshToken) {
@@ -2039,6 +2049,16 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       }
       notifyListeners();
     } catch (_) {}
+  }
+
+  void syncWatchlistMovies(String watchlistId, List<Map<String, dynamic>> rawMovies) {
+    final wl = _watchlists.cast<Watchlist?>().firstWhere(
+      (w) => w?.id == watchlistId, orElse: () => null);
+    if (wl == null) return;
+    wl.movies
+      ..clear()
+      ..addAll(rawMovies.map(_movieFromJson));
+    notifyListeners();
   }
 
   Movie _movieFromJson(Map<String, dynamic> m){

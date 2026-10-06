@@ -18,8 +18,6 @@ class WatchlistService {
   int _generation = 0;
   Timer? _pingTimer;
 
-  void Function()? onServerDown;
-
   final _controller = StreamController<WatchlistEvent>.broadcast();
   Stream<WatchlistEvent> get events => _controller.stream;
 
@@ -38,11 +36,15 @@ class WatchlistService {
       Uri.parse('$_wsBase?watchlistId=$watchlistId'),
     );
 
-    // Catch handshake failures — without this, WebSocketChannelException
-    // from a failed upgrade is unhandled and crashes the error zone.
+    // Catch handshake failures — schedule a reconnect rather than surfacing
+    // server-down, since a WS hiccup doesn't mean HTTP is unreachable.
     _channel!.ready.catchError((_) {
       if (_watchlistId == watchlistId && _generation == gen) {
-        onServerDown?.call();
+        Future.delayed(const Duration(seconds: 3), () {
+          if (_watchlistId == watchlistId && _generation == gen) {
+            _reconnect(watchlistId);
+          }
+        });
       }
     });
 
@@ -54,7 +56,6 @@ class WatchlistService {
       onError: (_, __) {}, // network errors are handled by onDone -> reconnect
       cancelOnError: false,
       onDone: () {
-        // Only reconnect if this is still the active connection
         if (_watchlistId == watchlistId && _generation == gen) {
           Future.delayed(const Duration(seconds: 3), () {
             if (_watchlistId == watchlistId && _generation == gen) {
@@ -65,7 +66,7 @@ class WatchlistService {
       },
     );
 
-    // Keep connection alive(Tunnel has 100s idle timeout)
+    // Keep connection alive — Cloudflare Tunnel has ~100s idle timeout
     _pingTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       try { _channel?.sink.add('{"type":"ping"}'); } catch (_) {}
     });

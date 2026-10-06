@@ -214,6 +214,13 @@ class _VetoScreenState extends State<VetoScreen> {
           context.read<AppState>().dismissVetoInviteFor(_watchlistId!);
         }
         final lobby = _parseLobby(e.data['lobbyPlayers']);
+        // Server sends the authoritative movie list so all clients pick from
+        // identical data even if local WS state diverged during idle.
+        final rawMovies = (e.data['movies'] as List?)
+            ?.cast<Map<String, dynamic>>();
+        if (rawMovies != null && _watchlistId != null) {
+          context.read<AppState>().syncWatchlistMovies(_watchlistId!, rawMovies);
+        }
         setState(() {
           _gameStatus       = 'picking';
           _pickCount        = (e.data['pickCount'] as num?)?.toInt() ?? _pickCount;
