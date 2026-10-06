@@ -1550,6 +1550,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _currentUser = _userFromAuthResult(result);
     notifyListeners();
     _scheduleTokenRefresh(refreshToken);
+    unawaited(loadTrending());
     try {
       await _loadWatchlists();
       await _loadFriendRequests();

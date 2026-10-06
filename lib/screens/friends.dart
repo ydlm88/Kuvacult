@@ -460,7 +460,12 @@ class _PendingRow extends StatelessWidget {
 
     return GestureDetector(
       onTap: () => Navigator.push(context,
-          MaterialPageRoute(builder: (_) => FriendProfileScreen(userId: fromId))),
+          MaterialPageRoute(builder: (_) => FriendProfileScreen(
+            userId: fromId,
+            initialName: fromDisplayName?.isNotEmpty == true
+                ? fromDisplayName!
+                : (fromUsername ?? ''),
+          ))),
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
         decoration: const BoxDecoration(
