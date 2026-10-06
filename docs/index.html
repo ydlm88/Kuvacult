@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kuvacult — watch together, argue later</title>
+<meta name="description" content="Shared watchlists your friends can edit, reviews, a veto game for picking what to watch, and séances for watching it together. Free for Windows.">
+<meta property="og:title" content="Kuvacult">
+<meta property="og:description" content="Your initiation awaits. Create, review, share and watch with your friends.">
+<meta property="og:image" content="assets/ritual.png">
+<link rel="icon" href="assets/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0A0A0A; --card: #121010; --ink: #f3e4cf; --ink-hi: #f7ecdc;
+    --ink-80: rgba(243,228,207,0.8); --ink-72: rgba(243,228,207,0.72); --ink-62: rgba(243,228,207,0.62);
+    --amber: #e8a13c; --amber-hi: #f2b257; --gold: #E9C468; --on-amber: #1b1210;
+    --line: rgba(255,255,255,0.07); --amber-line: rgba(232,161,60,0.4);
+    --serif: 'Instrument Serif', Georgia, serif; --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --wrap: 1120px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--mono); -webkit-font-smoothing: antialiased; }
+  a { color: var(--amber); text-decoration: none; }
+  a:hover { color: #ffc978; }
+  ::selection { background: rgba(232,161,60,0.35); }
+  img { display: block; max-width: 100%; }
+  .wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 24px; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.28em; text-transform: uppercase; color: var(--amber); }
+  .eyebrow.muted { color: var(--ink-62); letter-spacing: 0.3em; }
+  h1, h2 { margin: 0; font-family: var(--serif); font-weight: 400; color: var(--ink-hi); text-wrap: balance; }
+  p { margin: 0; text-wrap: pretty; }
+  .shot { border-radius: 16px; overflow: hidden; border: 1px solid rgba(255,255,255,0.09); box-shadow: 0 24px 60px rgba(0,0,0,0.6); }
+  .shot img { width: 100%; height: 100%; object-fit: cover; }
+
+  /* nav */
+  .nav { position: sticky; top: 0; z-index: 10; background: rgba(10,10,10,0.88); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .nav .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 14px; padding-bottom: 14px; }
+  .brand { display: flex; align-items: center; gap: 11px; }
+  .brand img { width: 30px; height: 30px; }
+  .brand span { font-size: 13px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--gold); }
+  .nav-links { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; justify-content: flex-end; }
+  .nav-links a { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-72); }
+  .nav-links a:hover { color: var(--ink); }
+  .nav-links a.cta { padding: 9px 14px; border-radius: 10px; background: var(--amber); color: var(--on-amber); }
+  .nav-links a.cta:hover { background: var(--amber-hi); color: var(--on-amber); }
+
+  /* hero */
+  .hero { position: relative; overflow: hidden; }
+  .hero::before { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(60% 70% at 22% 30%, rgba(255,166,71,0.13) 0%, rgba(255,140,43,0.03) 45%, transparent 75%); }
+  .hero .wrap { position: relative; padding-top: 88px; padding-bottom: 72px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 56px; align-items: center; }
+  .hero-copy { display: flex; flex-direction: column; gap: 26px; }
+  .hero h1 { font-size: clamp(52px, 7vw, 84px); line-height: 0.98; }
+  .hero p { font-size: 15px; line-height: 1.85; color: var(--ink-80); max-width: 44ch; }
+  .dl { display: flex; flex-direction: column; gap: 12px; }
+  .dl-row { display: flex; flex-wrap: wrap; gap: 10px; }
+  .btn { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-radius: 12px; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; }
+  .btn-primary { background: var(--amber); color: var(--on-amber); }
+  .btn-primary:hover { background: var(--amber-hi); color: var(--on-amber); }
+  .soon { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-radius: 12px; border: 1px dashed rgba(243,228,207,0.25); color: var(--ink-72); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; white-space: nowrap; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); flex: 0 0 auto; }
+  .release-line { font-size: 11px; line-height: 1.7; letter-spacing: 0.06em; color: var(--ink-62); }
+  .hero-shot { border-color: rgba(232,161,60,0.35); box-shadow: 0 30px 80px rgba(0,0,0,0.7); aspect-ratio: 1918 / 990; }
+  .hero-shot img { object-position: top; }
+
+  /* features */
+  .features { padding-top: 40px; padding-bottom: 24px; display: flex; flex-direction: column; gap: 88px; }
+  .feature { display: flex; flex-wrap: wrap; gap: 44px; align-items: center; }
+  .feature:nth-child(even) { flex-direction: row-reverse; }
+  .feature-copy { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+  .feature h2 { font-size: clamp(34px, 4vw, 46px); line-height: 1.04; }
+  .feature p { font-size: 14px; line-height: 1.85; color: rgba(243,228,207,0.78); max-width: 42ch; }
+  .feature .shot { flex: 1.6 1 420px; min-width: 0; }
+
+  /* roadmap */
+  .next { padding-top: 110px; padding-bottom: 40px; display: flex; flex-direction: column; gap: 30px; }
+  .next h2 { font-size: clamp(36px, 4.4vw, 52px); line-height: 1.02; margin-top: 12px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 16px; }
+  .card { display: flex; flex-direction: column; gap: 14px; padding: 24px; border-radius: 16px; background: var(--card); border: 1px solid rgba(255,255,255,0.08); }
+  .card.active { border-color: var(--amber-line); }
+  .tag { font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: rgba(243,228,207,0.7); }
+  .tag.amber { color: var(--amber); } .tag.green { color: #7fe0a0; }
+  .card h3 { margin: 0; font-family: var(--serif); font-weight: 400; font-size: 28px; line-height: 1.1; color: var(--ink-hi); }
+  .card p { font-size: 13px; line-height: 1.8; color: rgba(243,228,207,0.75); }
+  .paint { max-width: 520px; aspect-ratio: 948 / 950; border-color: rgba(232,161,60,0.35); }
+  .paint img { object-position: bottom; }
+
+  /* supporter */
+  .support { padding-top: 90px; padding-bottom: 90px; }
+  .support-box { position: relative; overflow: hidden; border-radius: 22px; padding: 44px 40px; background: var(--card); border: 1px solid var(--amber-line); display: flex; flex-wrap: wrap; gap: 36px; align-items: center; justify-content: space-between; }
+  .support-box::before { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(50% 90% at 85% 50%, rgba(255,166,71,0.12) 0%, transparent 70%); }
+  .support-copy { position: relative; flex: 1 1 340px; display: flex; flex-direction: column; gap: 14px; }
+  .support-copy h2 { font-size: clamp(34px, 4vw, 46px); line-height: 1.04; }
+  .support-copy p { font-size: 14px; line-height: 1.85; color: rgba(243,228,207,0.78); max-width: 46ch; }
+  .price { position: relative; display: flex; align-items: baseline; gap: 10px; }
+  .price b { font-family: var(--serif); font-weight: 400; font-size: 72px; line-height: 0.9; color: var(--gold); }
+  .price span { font-size: 12px; letter-spacing: 0.12em; color: rgba(243,228,207,0.75); }
+
+  /* footer */
+  footer { border-top: 1px solid rgba(255,255,255,0.06); }
+  footer .wrap { padding-top: 30px; padding-bottom: 40px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 18px; }
+  footer .brand img { width: 22px; height: 22px; }
+  footer .brand span { font-size: 11px; letter-spacing: 0.14em; text-transform: none; color: var(--ink-62); }
+  .foot-links { display: flex; gap: 20px; flex-wrap: wrap; }
+  .foot-links a { font-size: 11px; letter-spacing: 0.14em; color: var(--ink-72); }
+  .foot-links a:hover { color: var(--ink); }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="#top"><img src="assets/logo.png" alt=""><span>Kuvacult</span></a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#next">Coming next</a>
+      <a class="cta" href="#" data-link="latest">Download</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <div class="hero-copy">
+      <div class="eyebrow muted">Free for Windows</div>
+      <h1>Your initiation awaits.</h1>
+      <p>Shared watchlists your friends can edit, reviews without the essay, a veto game for deciding what to watch, and séances for watching it together.</p>
+      <div class="dl">
+        <div class="dl-row">
+          <a class="btn btn-primary" href="#" data-link="windows">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 2.2 6.5 1.3v6.3H0zM7.3 1.2 16 0v7.6H7.3zM0 8.4h6.5v6.3L0 13.8zM7.3 8.4H16V16l-8.7-1.2z"/></svg>
+            Download for Windows
+          </a>
+          <div class="soon"><span class="dot"></span>Android, macOS &amp; iOS coming soon</div>
+        </div>
+        <div class="release-line" id="release-line">Latest build from GitHub Releases</div>
+      </div>
+    </div>
+    <div class="shot hero-shot"><img src="assets/ritual.png" alt="Kuvacult's Ritual page with a lit séance candle"></div>
+  </div>
+</header>
+
+<main>
+  <section class="wrap features" id="features">
+    <article class="feature">
+      <div class="feature-copy">
+        <div class="eyebrow">Watchlists</div>
+        <h2>Lists your friends can actually edit.</h2>
+        <p>Make a list, share the code, and everyone adds to it. Changes show up live. Bring your Letterboxd history with you so you don't start over.</p>
+      </div>
+      <div class="shot" style="aspect-ratio: 1918 / 990"><img src="assets/watchlists.png" alt="Shared watchlists" style="object-position: top" loading="lazy"></div>
+    </article>
+    <article class="feature">
+      <div class="feature-copy">
+        <div class="eyebrow">Reviews</div>
+        <h2>Say what you actually thought.</h2>
+        <p>Star ratings, rewatch tags, and a feed of what everyone else is watching. Short takes welcome.</p>
+      </div>
+      <div class="shot" style="aspect-ratio: 1918 / 990"><img src="assets/reviews.png" alt="Reviews feed" style="object-position: top" loading="lazy"></div>
+    </article>
+    <article class="feature">
+      <div class="feature-copy">
+        <div class="eyebrow">Search</div>
+        <h2>Find shows from our massive catalog.</h2>
+        <p>Search films and shows, then drop them straight into any list with one tap.</p>
+      </div>
+      <div class="shot" style="aspect-ratio: 1918 / 990"><img src="assets/search.png" alt="Search results" style="object-position: top" loading="lazy"></div>
+    </article>
+    <article class="feature">
+      <div class="feature-copy">
+        <div class="eyebrow">Veto Sacrifice</div>
+        <h2>Sacrifice what you'd rather die than watch.</h2>
+        <p>Everyone picks, then everyone vetoes until one film is left. Tied? Settle it with blackjack.</p>
+      </div>
+      <div class="shot" style="aspect-ratio: 951 / 950"><img src="assets/sacrifice.png" alt="A film marked sacrificed in the veto game" style="object-position: bottom" loading="lazy"></div>
+    </article>
+    <article class="feature">
+      <div class="feature-copy">
+        <div class="eyebrow">Séance · Beta</div>
+        <h2>Light the candle. Watch together.</h2>
+        <p>Start a séance and friends join one room. Share your screen to watch media you own from your own machine. Screen share is in beta, up to 30fps, and Kuvacult never hosts or stores your files.</p>
+      </div>
+      <div class="shot" style="aspect-ratio: 1918 / 560"><img src="assets/ritual.png" alt="Séance card with a lit candle" style="object-position: top" loading="lazy"></div>
+    </article>
+    <article class="feature">
+      <div class="feature-copy">
+        <div class="eyebrow">Profiles</div>
+        <h2>Your taste, on display.</h2>
+        <p>Pick four posters for your banner, show off your reviews, lists and watch history, and follow your friends.</p>
+      </div>
+      <div class="shot" style="aspect-ratio: 1918 / 995"><img src="assets/profile.png" alt="Profile page" style="object-position: top" loading="lazy"></div>
+    </article>
+  </section>
+
+  <section class="wrap next" id="next">
+    <div>
+      <div class="eyebrow">What's in store</div>
+      <h2>Coming next.</h2>
+    </div>
+    <div class="cards">
+      <div class="card active"><span class="tag amber">In progress</span><h3>Paintbrush reviews</h3><p>Draw what you thought when you don't have the words, right in the review box.</p></div>
+      <div class="card"><span class="tag">Coming soon</span><h3>Custom profiles</h3><p>Deeply customizable profiles. Dev Supporters get them first.</p></div>
+      <div class="card"><span class="tag">Coming soon</span><h3>Android, macOS &amp; iOS</h3><p>Kuvacult is Windows-only for now. Versions for Android, Mac and iPhone are on the way.</p></div>
+      <div class="card"><span class="tag green">Beta</span><h3>Séance screen share</h3><p>Smoother, higher-frame-rate screen sharing as it comes out of beta.</p></div>
+    </div>
+    <div class="shot paint"><img src="assets/paint-review.png" alt="A sun drawn by hand in the review box" loading="lazy"></div>
+  </section>
+
+  <section class="wrap support">
+    <div class="support-box">
+      <div class="support-copy">
+        <div class="eyebrow muted">Dev Supporter</div>
+        <h2>Five dollars, once, forever.</h2>
+        <p>Everything above is free. If you want to back the project, Dev Supporter is a one-time lifetime upgrade, and supporters get custom profiles first. No subscriptions, ever.</p>
+      </div>
+      <div class="price"><b>$5</b><span>in the app</span></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="brand"><img src="assets/logo.png" alt=""><span>Kuvacult · made by two people</span></div>
+    <div class="foot-links">
+      <a href="#" data-link="releases">All releases</a>
+      <a href="#" data-link="repo">GitHub</a>
+      <a href="#" data-link="issues">Report a bug</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // ---- configure -----------------------------------------------------------
+  // The GitHub repo whose Releases hold the app builds.
+  const REPO = "ydlm88/Kuvacult";
+  // Asset filename patterns per platform. Add android/mac/ios when they ship.
+  const ASSETS = { windows: /\.(exe|msix|msi|zip)$/i };
+  // --------------------------------------------------------------------------
+
+  const base = `https://github.com/${REPO}`;
+  const links = {
+    latest: `${base}/releases/latest`,
+    releases: `${base}/releases`,
+    repo: base,
+    issues: `${base}/issues`,
+    windows: `${base}/releases/latest`
+  };
+  const apply = () => document.querySelectorAll("[data-link]").forEach((a) => {
+    const href = links[a.dataset.link]; if (href) a.href = href;
+  });
+  apply();
+
+  // Point download buttons straight at the newest release's files. If the API
+  // is unreachable or rate-limited (60 req/hr per visitor IP), the buttons
+  // keep pointing at /releases/latest, which always works.
+  fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: "application/vnd.github+json" } })
+    .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+    .then((rel) => {
+      let size = 0;
+      for (const [key, re] of Object.entries(ASSETS)) {
+        const asset = (rel.assets || []).find((x) => re.test(x.name));
+        if (asset) { links[key] = asset.browser_download_url; if (key === "windows") size = asset.size; }
+      }
+      apply();
+      const date = rel.published_at ? new Date(rel.published_at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "";
+      const parts = [`Latest ${rel.tag_name}`];
+      if (date) parts.push(date);
+      if (size) parts.push(`${Math.round(size / 1048576)} MB`);
+      parts.push("from GitHub Releases");
+      document.getElementById("release-line").textContent = parts.join(" · ");
+    })
+    .catch(() => {});
+</script>
+</body>
+</html>
