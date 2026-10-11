@@ -1,0 +1,145 @@
+// Friend request routes — send, accept, decline, and list friend requests.
+const crypto = require('crypto');
+const express = require('express');
+const { query } = require('../db');
+const { requireAuth } = require('../middleware/auth');
+
+const router = express.Router();
+
+async function arrayAdd(table, col, val, rowId) {
+    await query(
+        `UPDATE ${table}
+     SET ${col} = CASE WHEN ${col} @> $1::jsonb THEN ${col}
+                       ELSE ${col} || $1::jsonb END
+     WHERE id = $2`,
+        [JSON.stringify([val]), rowId]
+    );
+}
+
+let _broadcastToUser = () => {};
+
+// POST /friend-requests
+router.post('/', requireAuth, async (req, res) => {
+    try {
+        const { fromId, toId } = req.body;
+        if (!fromId || !toId)
+            return res.status(400).json({ error: 'fromId and toId are required' });
+        if (fromId === toId)
+            return res.status(400).json({ error: 'Cannot send a friend request to yourself' });
+        if (req.user.sub !== fromId) return res.status(403).json({ error: 'Forbidden' });
+
+        const fromR = await query('SELECT friend_ids, display_name, username, avatar_url FROM users WHERE id = $1', [fromId]);
+        if (!fromR.rows.length) return res.status(404).json({ error: 'Sender not found' });
+        if ((fromR.rows[0].friend_ids ?? []).includes(toId))
+            return res.status(409).json({ error: 'Already friends' });
+
+        const dupR = await query(
+            `SELECT id FROM friend_requests WHERE from_id = $1 AND to_id = $2 AND status = 'pending' LIMIT 1`,
+            [fromId, toId]
+        );
+        if (dupR.rows.length)
+            return res.status(409).json({ error: 'Friend request already pending' });
+
+        const id = crypto.randomUUID();
+        await query(
+            `INSERT INTO friend_requests (id, from_id, to_id, status) VALUES ($1, $2, $3, 'pending')`,
+            [id, fromId, toId]
+        );
+
+        // Push real-time notification to recipient
+        const u = fromR.rows[0];
+        _broadcastToUser(toId, {
+            type: 'friend_request',
+            requestId: id,
+            fromId,
+            fromName: u.display_name || '',
+            fromHandle: u.username || '',
+            fromAvatarUrl: u.avatar_url || null,
+        });
+
+        res.status(201).json({ id, fromId, toId, status: 'pending' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// PATCH /friend-requests/:id/accept
+router.patch('/:id/accept', requireAuth, async (req, res) => {
+    try {
+        const r = await query('SELECT * FROM friend_requests WHERE id = $1', [req.params.id]);
+        if (!r.rows.length) return res.status(404).json({ error: 'Friend request not found' });
+        const { from_id: fromId, to_id: toId, status } = r.rows[0];
+        if (status !== 'pending')
+            return res.status(409).json({ error: 'Request is no longer pending' });
+        if (req.user.sub !== toId) return res.status(403).json({ error: 'Forbidden' });
+
+        await query(`UPDATE friend_requests SET status = 'accepted' WHERE id = $1`, [
+            req.params.id,
+        ]);
+        await arrayAdd('users', 'friend_ids', fromId, toId);
+        await arrayAdd('users', 'friend_ids', toId, fromId);
+
+        res.json({ id: req.params.id, status: 'accepted' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// DELETE /friend-requests/unfriend/:userId — remove an existing friendship
+router.delete('/unfriend/:userId', requireAuth, async (req, res) => {
+    try {
+        const meId    = req.user.sub;
+        const otherId = req.params.userId;
+        if (meId === otherId) return res.status(400).json({ error: 'Cannot unfriend yourself' });
+
+        await query(
+            `UPDATE users SET friend_ids = COALESCE((
+               SELECT jsonb_agg(elem) FROM jsonb_array_elements(friend_ids) elem
+               WHERE elem::text != $1::jsonb::text
+             ), '[]'::jsonb) WHERE id = $2`,
+            [JSON.stringify(otherId), meId]
+        );
+        await query(
+            `UPDATE users SET friend_ids = COALESCE((
+               SELECT jsonb_agg(elem) FROM jsonb_array_elements(friend_ids) elem
+               WHERE elem::text != $1::jsonb::text
+             ), '[]'::jsonb) WHERE id = $2`,
+            [JSON.stringify(meId), otherId]
+        );
+        // Also clean up any accepted friend_request rows between them
+        await query(
+            `DELETE FROM friend_requests
+             WHERE status = 'accepted'
+               AND ((from_id = $1 AND to_id = $2) OR (from_id = $2 AND to_id = $1))`,
+            [meId, otherId]
+        );
+        res.json({ ok: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// DELETE /friend-requests/:id — decline or cancel
+router.delete('/:id', requireAuth, async (req, res) => {
+    try {
+        const r = await query('SELECT from_id, to_id FROM friend_requests WHERE id = $1', [
+            req.params.id,
+        ]);
+        if (!r.rows.length) return res.status(404).json({ error: 'Friend request not found' });
+        const { from_id: fromId, to_id: toId } = r.rows[0];
+        if (req.user.sub !== fromId && req.user.sub !== toId)
+            return res.status(403).json({ error: 'Forbidden' });
+
+        await query(`UPDATE friend_requests SET status = 'declined' WHERE id = $1`, [
+            req.params.id,
+        ]);
+        res.json({ id: req.params.id, status: 'declined' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+module.exports = (broadcastToUser) => {
+    _broadcastToUser = broadcastToUser;
+    return router;
+};

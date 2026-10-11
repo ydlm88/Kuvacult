@@ -1,0 +1,53 @@
+name: kuvacult
+description: "A shared collaborative watchlist platform for movies."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  google_fonts: ^6.2.1
+  provider: ^6.1.2
+  http: ^1.6.0
+  # Secure local token storage — stores JWT access + refresh tokens
+  flutter_secure_storage: ^9.2.2
+  # Image picker — lets users select a profile photo from gallery or camera
+  image_picker: ^1.1.2
+  # WebSocket client — used for real-time veto game sync
+  web_socket_channel: ^3.0.1
+  # File picker — lets users select files (ZIP/CSV) for Letterboxd import
+  file_picker: ^8.1.7
+  # Drag-and-drop file target for Windows/macOS — used on the import page
+  desktop_drop: ^0.4.4
+  # Disk-backed image cache — images persist between sessions, eliminates carousel reloads
+  cached_network_image: ^3.4.1
+  # Opens URLs in the default browser — used for the update banner link
+  url_launcher: ^6.3.1
+  # WebRTC + LiveKit for the Séance screen-share feature
+  livekit_client: ^2.4.0
+  flutter_webrtc: ^1.6.2
+  # Runtime permission requests (mic on Android/Windows)
+  permission_handler: ^11.3.1
+  # Prevents screen from sleeping during an active séance
+  wakelock_plus: ^1.3.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/sus_sun.png
+    - assets/images/kuvacult_logo.png
+    - assets/grain.png
+    - assets/onboarding/
+    - assets/brand/
+    - assets/mascots/
+    - assets/cards/
