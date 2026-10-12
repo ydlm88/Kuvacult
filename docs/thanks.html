@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="canonical" href="https://kuvacult.com/thanks.html">
+<title>Thanks for supporting Kuvacult</title>
+<link rel="icon" href="assets/sun.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<!-- Reference 1d. Stripe Payment Link success URL. Drop this file + assets/sun.png into the GitHub Pages site. -->
+<style>
+  html, body { margin: 0; height: 100%; background: #0A0A0A; }
+  body { display: flex; align-items: center; justify-content: center; overflow: hidden; color: #f3e4cf; font-family: 'JetBrains Mono', ui-monospace, monospace; -webkit-font-smoothing: antialiased; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes breath { 0%, 100% { opacity: .55; } 50% { opacity: .95; } }
+  @keyframes boil { 0% { filter: url(#a); } 33% { filter: url(#b); } 66% { filter: url(#c); } 100% { filter: url(#a); } }
+  .wrap { position: relative; display: flex; flex-direction: column; align-items: center; gap: 22px; text-align: center; padding: 24px; }
+  .glow { position: fixed; left: 50%; top: 40%; width: 640px; height: 640px; margin: -320px 0 0 -320px; border-radius: 50%; pointer-events: none;
+          background: radial-gradient(circle, rgba(255,166,71,.16) 0%, rgba(255,140,43,.04) 40%, rgba(0,0,0,0) 68%); animation: breath 6s ease-in-out infinite; }
+  .mark { position: relative; width: 180px; height: 180px; display: flex; align-items: center; justify-content: center; }
+  .mark svg { position: absolute; inset: 0; animation: spin 80s linear infinite; }
+  .mark img { position: relative; width: 104px; height: 104px; animation: boil 420ms steps(1) infinite; }
+  h1 { margin: 0; font-family: 'Instrument Serif', serif; font-weight: 400; font-size: clamp(36px, 6vw, 52px); line-height: 1; color: #f7ecdc; }
+  h1 em { color: #E9C468; }
+  p { margin: 0; max-width: 470px; font-size: 13px; line-height: 1.85; color: rgba(243,228,207,.72); }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="a" x="-20%" y="-20%" width="140%" height="140%"><feTurbulence type="fractalNoise" baseFrequency=".06" numOctaves="3" seed="3" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="3" xChannelSelector="R" yChannelSelector="G"/></filter>
+  <filter id="b" x="-20%" y="-20%" width="140%" height="140%"><feTurbulence type="fractalNoise" baseFrequency=".06" numOctaves="3" seed="11" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="3" xChannelSelector="R" yChannelSelector="G"/></filter>
+  <filter id="c" x="-20%" y="-20%" width="140%" height="140%"><feTurbulence type="fractalNoise" baseFrequency=".06" numOctaves="3" seed="19" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="3" xChannelSelector="R" yChannelSelector="G"/></filter>
+</svg>
+<div class="glow"></div>
+<main class="wrap">
+  <div class="mark">
+    <svg viewBox="0 0 180 180" width="180" height="180" aria-hidden="true"><g fill="none" stroke="#E3BE5E" stroke-linecap="round" style="animation: boil 420ms steps(1) infinite"><circle cx="90" cy="90" r="86" stroke-width="1" opacity=".4"/><circle cx="90" cy="90" r="74" stroke-width="1.3" stroke-dasharray="2 8" opacity=".55"/></g></svg>
+    <img src="assets/sun.png" alt="Kuvacult">
+  </div>
+  <h1>Thanks for supporting <em>Kuvacult.</em></h1>
+  <p>Your support means a lot. Close this page and return to the app — your supporter badge will show up shortly.</p>
+</main>
+</body>
+</html>
