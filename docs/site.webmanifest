@@ -1,0 +1,14 @@
+{
+  "name": "Kuvacult",
+  "short_name": "Kuvacult",
+  "description": "A free social film diary and movie tracker — shared watchlists, veto games, and co-watching séances.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080707",
+  "theme_color": "#E8A13C",
+  "icons": [
+    { "src": "/assets/favicon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/assets/favicon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/assets/favicon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
