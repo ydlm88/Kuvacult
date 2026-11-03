@@ -1,0 +1,43 @@
+name: Supabase keep-alive
+
+on:
+  schedule:
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Force a real DB query on waitlist
+        env:
+          SUPABASE_URL: https://yckvotxsknnhoqndboht.supabase.co
+          SUPABASE_KEY: sb_publishable_hEEU8_mEDR9Ai8OsaK3vYQ_zd1Wq1z4
+        run: |
+          set -euo pipefail
+
+          # 1. GET with exact count — PostgREST must execute SELECT count(*) on waitlist.
+          echo "GET /rest/v1/waitlist?select=id&limit=1 (with count=exact)"
+          curl -sfS -D - -o /dev/null \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -H "Prefer: count=exact" \
+            "$SUPABASE_URL/rest/v1/waitlist?select=id&limit=1"
+
+          # 2. HEAD on same resource — second distinct query path.
+          echo "HEAD /rest/v1/waitlist"
+          curl -sfS -I \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -H "Prefer: count=exact" \
+            "$SUPABASE_URL/rest/v1/waitlist?select=id" \
+            > /dev/null
+
+          # 3. Auth service health — exercises the auth schema connection.
+          echo "GET /auth/v1/health"
+          curl -sfS \
+            -H "apikey: $SUPABASE_KEY" \
+            "$SUPABASE_URL/auth/v1/health" \
+            > /dev/null
+
+          echo "Keep-alive OK at $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
