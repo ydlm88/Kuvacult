@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="canonical" href="https://kuvacult.com/blog/how-to-set-up-a-plex-server.html">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://kuvacult.com/"},{"@type":"ListItem","position":2,"name":"Blog","item":"https://kuvacult.com/blog/index.html"},{"@type":"ListItem","position":3,"name":"How to Set Up a Plex Server at Home (2026 Guide)","item":"https://kuvacult.com/blog/how-to-set-up-a-plex-server.html"}]}</script>
+<title>How to Set Up a Plex Server at Home (2026 Guide) — Kuvacult</title>
+<meta name="description" content="Why owning your films still matters in the streaming era, and how to set up a Plex Media Server at home to organise, stream and share the collection you own.">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Kuvacult">
+<meta property="og:url" content="https://kuvacult.com/blog/how-to-set-up-a-plex-server.html">
+<meta property="article:published_time" content="2026-11-02">
+<meta property="og:title" content="How to Set Up a Plex Server at Home (2026 Guide) — Kuvacult">
+<meta property="og:description" content="Why owning your films still matters in the streaming era, and how to set up a Plex Media Server at home to organise, stream and share the collection you own.">
+<meta property="og:image" content="https://kuvacult.com/assets/blog/plex-server.webp">
+<meta property="og:image:width" content="1600">
+<meta property="og:image:height" content="834">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#080707">
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="icon" type="image/png" sizes="48x48" href="../assets/kc-icon-48.png">
+<link rel="icon" type="image/png" sizes="96x96" href="../assets/kc-icon-96.png">
+<link rel="icon" type="image/png" sizes="192x192" href="../assets/kc-icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="../assets/kc-icon-180.png">
+<link rel="manifest" href="../site.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../style.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"How to Set Up a Plex Server at Home (2026 Guide)","description":"Why owning your films still matters in the streaming era, and how to set up a Plex Media Server at home to organise, stream and share the collection you own.","image":"https://kuvacult.com/assets/blog/plex-server.webp","datePublished":"2026-11-02","dateModified":"2026-11-02","author":{"@type":"Organization","name":"Kuvacult","url":"https://kuvacult.com/team.html"},"publisher":{"@type":"Organization","name":"Kuvacult","logo":{"@type":"ImageObject","url":"https://kuvacult.com/assets/kc-icon-512.png"}},"mainEntityOfPage":"https://kuvacult.com/blog/how-to-set-up-a-plex-server.html"}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"HowTo","name":"How to set up a Plex server at home","step":[{"@type":"HowToStep","position":1,"text":"Choose a computer or NAS that can stay on, with enough storage for your collection."},{"@type":"HowToStep","position":2,"text":"Download and install Plex Media Server, then sign in with a free Plex account."},{"@type":"HowToStep","position":3,"text":"Organise your films into folders named Title (Year)."},{"@type":"HowToStep","position":4,"text":"Add a Movies library in Plex and point it at that folder."},{"@type":"HowToStep","position":5,"text":"Open Plex on your TV, phone or browser and press play."}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Is Plex free?","acceptedAnswer":{"@type":"Answer","text":"Plex Media Server and local playback on your home network are free. Remote streaming of your personal media requires a Plex Pass for the server owner or a Remote Watch Pass for the viewer."}},{"@type":"Question","name":"What do I need to run a Plex server?","acceptedAnswer":{"@type":"Answer","text":"A computer or NAS that can stay switched on, enough storage for your films, and the free Plex Media Server software."}},{"@type":"Question","name":"How should I name my movie files for Plex?","acceptedAnswer":{"@type":"Answer","text":"Put each film in its own folder named Title (Year), with the file named the same way. Plex uses that to match the correct poster and details."}},{"@type":"Question","name":"Does Kuvacult work with Plex?","acceptedAnswer":{"@type":"Answer","text":"Yes, alongside it. Plex plays the film and Kuvacult handles the shared watchlist, the pick and the séance. Share Plex playback in a séance and friends can watch without a Plex account or remote pass."}},{"@type":"Question","name":"Can I share Netflix or Disney+ in a Kuvacult séance?","acceptedAnswer":{"@type":"Answer","text":"No. Streaming services use DRM that blocks screen capture. Séances work with films you own, such as those in your Plex library."}},{"@type":"Question","name":"Is it legal to put my movies on Plex?","acceptedAnswer":{"@type":"Answer","text":"Plex is legal software for organising media you own. Laws on copying discs differ by country, so check the rules where you live."}}]}</script>
+</head>
+<body>
+<header class="nav" id="nav">
+  <div class="wrap">
+    <a class="brand" href="../index.html"><img src="../assets/logo.webp" alt="" width="28" height="28"><span>Kuvacult</span></a>
+    <nav class="links" id="menu" aria-label="Main">
+      <a href="../index.html#features">Features</a>
+      <div class="dd">
+        <button class="dd-btn" type="button" aria-expanded="false" aria-haspopup="true">Tools<span class="dd-chev" aria-hidden="true"></span></button>
+        <div class="dd-menu">
+          <a href="../tools/index.html"><b>Chronological orders</b><small>Every franchise in watch order, with watchlist keys</small></a>
+          <a href="../tools/movie-night-picker.html"><b>Movie night picker</b><small>Settle what to watch with blackjack</small></a>
+          <a href="../tools/movie-roulette.html"><b>Movie roulette</b><small>Spin for a random film by genre</small></a>
+        </div>
+      </div>
+      <a href="../blog/index.html">Blog</a>
+      <a href="../status.html">Status</a>
+      <a href="../faq.html">FAQ</a>
+      <a class="dl" href="#" data-link="windows"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 2.2 6.5 1.3v6.3H0zM7.3 1.2 16 0v7.6H7.3zM0 8.4h6.5v6.3L0 13.8zM7.3 8.4H16V16l-8.7-1.2z"/></svg>Download</a>
+    </nav>
+    <button class="burger" id="burger" aria-label="Open menu" aria-expanded="false" aria-controls="menu"><span></span></button>
+  </div>
+</header>
+
+<main class="wrap page narrow article">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span>/</span><a href="index.html">Blog</a><span>/</span><span>Plex server at home</span></nav>
+  <div class="eyebrow">How-to · 7 min read</div>
+  <h1>Set up a Plex server, <em>own your media.</em></h1>
+  <p class="byline">By <a href="../team.html">the Kuvacult team</a> · Published November 2, 2026</p>
+  <p class="lede">Streaming made it effortless to watch almost anything, and just as effortless to lose it. Films leave services without warning, “purchases” turn out to be licences, and the version you loved can be quietly edited. A home media server puts the collection you own back in your hands. Here’s why it’s worth doing, and how to set one up with Plex.</p>
+  <div class="prose">
+    <h2>Why owning your media still matters</h2>
+    <p><strong>Catalogues change constantly.</strong> Streaming libraries are built on licensing deals that expire, so a film that’s on a service this month can be gone the next. If it’s the one you were planning for Friday, that’s the end of the plan.</p>
+    <p><strong>Digital “purchases” are usually licences.</strong> Buying a film on most storefronts gives you the right to stream it for as long as the store keeps that right. When a licence changes hands, titles can disappear from libraries people paid for.</p>
+    <p><strong>The cut you see isn’t guaranteed.</strong> Services sometimes swap in altered versions, trim scenes or replace music when rights lapse. A disc on your shelf is the film exactly as it was released.</p>
+    <p><strong>Quality and extras.</strong> A Blu-ray typically carries a higher bitrate than a stream, and it often comes with commentaries, deleted scenes and documentaries that never make it to a streaming page.</p>
+    <p><strong>No DRM, no black screens.</strong> Streaming services block screen sharing, which is why a Discord or séance stream of Netflix comes out black. Files you own play anywhere, including in a shared screen with friends.</p>
+    <h2>What you’ll need</h2>
+    <p>Very little. Any computer that can stay switched on will do, whether that’s an old laptop, a desktop or a network storage box (NAS). Add storage to match your ambitions: a feature film runs from a few gigabytes to around 30 for a full-quality Blu-ray copy, so an external drive of a few terabytes holds a substantial collection.</p>
+    <p>Then the software. <a href="https://www.plex.tv/media-server-downloads/" rel="noopener">Plex Media Server</a> is free and runs on Windows, macOS, Linux and most NAS devices. If you’d prefer fully open-source software, Jellyfin does a similar job.</p>
+    <h2>Where your collection comes from</h2>
+    <p>The point of a home server is to keep media you legitimately own. That might mean DRM-free digital purchases, your own home videos, public domain classics, or copies of discs you’ve bought. The rules on copying discs vary by country, so check what’s permitted where you live before you digitise your shelf. Plex is a library for your collection, not a way to download films you haven’t paid for.</p>
+    <h2>Setting up Plex, step by step</h2>
+  </div>
+  <div class="steps article-steps">
+    <div class="step"><span>1</span><p style="margin:0;min-width:0">Download Plex Media Server for your computer or NAS, install it and sign in with a free Plex account.</p></div>
+    <div class="step"><span>2</span><p style="margin:0;min-width:0">Make a Movies folder and give each film its own subfolder named <em>Title (Year)</em>, for example <em>The Thing (1982)</em>. This is what lets Plex fetch the right poster, synopsis and cast.</p></div>
+    <div class="step"><span>3</span><p style="margin:0;min-width:0">In Plex, add a library, choose Movies and point it at that folder. Plex scans it and builds your catalogue in a few minutes.</p></div>
+    <div class="step"><span>4</span><p style="margin:0;min-width:0">Install the Plex app on your TV, phone or console, or open it in a browser, and your collection is ready to play anywhere in the house.</p></div>
+  </div>
+  <div class="prose">
+    <h2>Watching away from home</h2>
+    <p>Playback on your home network is free. Streaming your library remotely, or sharing it with friends who watch from their own homes, now needs a paid plan: either the server owner has a Plex Pass, or each viewer gets a Remote Watch Pass. Check Plex’s current pricing before you rely on it.</p>
+    <h2>Using Kuvacult with Plex</h2>
+    <p>Plex is excellent at holding and playing your collection. Kuvacult takes care of everything around it: deciding what to watch, watching it together and remembering what you thought. The two work side by side, and owning your media is exactly what makes the pairing work so well.</p>
+    <p><strong>Plan from your own shelf.</strong> Keep a shared watchlist in <a href="../index.html#features">Kuvacult</a> of the films in your library that the group wants to see, so movie night starts from a real shortlist.</p>
+    <p><strong>Settle the pick.</strong> Run <a href="../index.html#veto-sacrifice">Veto Sacrifice</a> on that list, or have everyone play a hand in the <a href="../tools/movie-night-picker.html">movie night picker</a> from their own phones.</p>
+    <p><strong>Screen share without the usual problems.</strong> Play the film from Plex on your computer and share it in a Kuvacult séance, our built-in screen sharing (currently in beta). Because the file is yours, there’s no DRM to black out the stream. Your friends don’t need a Plex account or a Remote Watch Pass, since they’re watching your screen rather than connecting to your server. And with one person hosting, everyone sees the same frame at the same moment, so nobody is counting down to press play.</p>
+    <p><strong>Keep the record.</strong> When the credits roll, everyone logs and rates the film in their diary, and your library slowly becomes a history of every movie night you’ve hosted.</p>
+    <p>Hosting on Discord instead? Our guide to <a href="how-to-host-a-discord-movie-night.html">hosting a Discord movie night</a> covers the rest of the evening.</p>
+  </div>
+  <section class="section faq">
+    <h2 class="h2">Questions</h2>
+    <details><summary>Is Plex free?</summary><p>Plex Media Server and local playback on your home network are free. Remote streaming of your personal media requires a Plex Pass for the server owner or a Remote Watch Pass for the viewer.</p></details>
+    <details><summary>What do I need to run a Plex server?</summary><p>A computer or NAS that can stay switched on, enough storage for your films, and the free Plex Media Server software.</p></details>
+    <details><summary>How should I name my movie files for Plex?</summary><p>Put each film in its own folder named Title (Year), with the file named the same way. Plex uses that to match the correct poster and details.</p></details>
+    <details><summary>Does Kuvacult work with Plex?</summary><p>Yes, alongside it. Plex plays the film and Kuvacult handles the shared watchlist, the pick and the séance. Share Plex playback in a séance and friends can watch without a Plex account or remote pass.</p></details>
+    <details><summary>Can I share Netflix or Disney+ in a Kuvacult séance?</summary><p>No. Streaming services use DRM that blocks screen capture. Séances work with films you own, such as those in your Plex library.</p></details>
+    <details><summary>Is it legal to put my movies on Plex?</summary><p>Plex is legal software for organising media you own. Laws on copying discs differ by country, so check the rules where you live.</p></details>
+  </section>
+  <section class="cta-band">
+    <img src="../assets/logo.webp" alt="" width="56" height="56" loading="lazy">
+    <h2 class="h2">Watch it with <em>your friends.</em></h2>
+    <p class="body">Kuvacult is a free movie tracker with shared watchlists, a veto game for picking movie night, and séances for watching together.</p>
+    <div class="ctas"><a class="pill pill-primary" href="#" data-link="windows"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 2.2 6.5 1.3v6.3H0zM7.3 1.2 16 0v7.6H7.3zM0 8.4h6.5v6.3L0 13.8zM7.3 8.4H16V16l-8.7-1.2z"/></svg>Download for Windows</a><a class="pill pill-ghost" href="../index.html">See all features</a></div>
+  </section>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="foot">
+      <div class="foot-brand">
+        <a class="brand" href="../index.html"><img src="../assets/logo.webp" alt="" width="28" height="28" loading="lazy"><span>Kuvacult</span></a>
+        <p>A social film diary and movie tracker for Windows.</p>
+        <div class="socials">
+          <a class="social" href="#" data-link="repo" aria-label="Kuvacult on GitHub"><span class="ico ico-github"></span></a>
+          <a class="social" href="#" data-social="tiktok" aria-label="Kuvacult on TikTok"><span class="ico ico-tiktok"></span></a>
+          <a class="social" href="#" data-social="instagram" aria-label="Kuvacult on Instagram"><span class="ico ico-instagram"></span></a>
+        </div>
+      </div>
+      <div><h4>Kuvacult</h4><ul>
+        <li><a href="../index.html#features">Features</a></li>
+        <li><a href="../index.html#import">Letterboxd import</a></li>
+        <li><a href="../index.html#support">Supporter tiers</a></li>
+        <li><a href="../index.html#next">Coming next</a></li>
+        <li><a href="#" data-link="windows">Download for Windows</a></li>
+        <li><a href="../mobile.html">iPhone &amp; Android early access</a></li>
+        <li><a href="#" data-link="releases">All releases</a></li>
+      </ul></div>
+      <div><h4>Chronological orders</h4><ul>
+        <li><a href="../tools/mcu-chronological-order.html">MCU in chronological order</a></li>
+        <li><a href="../tools/star-wars-movies-in-order.html">Star Wars movies in order</a></li>
+        <li><a href="../tools/harry-potter-movies-in-order.html">Harry Potter movies in order</a></li>
+        <li><a href="../tools/dragon-ball-watch-order.html">Dragon Ball watch order</a></li>
+        <li><a href="../tools/halloween-movies-in-order.html">Halloween movies in order</a></li>
+        <li><a href="../tools/scream-movies-in-order.html">Scream movies in order</a></li>
+        <li><a href="../tools/hunger-games-movies-in-order.html">Hunger Games movies in order</a></li>
+        <li><a href="../tools/evil-dead-watch-order.html">Evil Dead watch order</a></li>
+        <li><a href="../tools/jujutsu-kaisen-watch-order.html">Jujutsu Kaisen watch order</a></li>
+        <li><a href="../tools/evangelion-watch-order.html">Evangelion watch order</a></li>
+        <li><a href="../tools/the-walking-dead-watch-order.html">The Walking Dead watch order</a></li>
+        <li><a href="../tools/avatar-the-last-airbender-watch-order.html">Avatar: The Last Airbender watch order</a></li>
+        <li><a href="../tools/index.html">All 26 chronological orders →</a></li>
+      </ul></div>
+      <div><h4>Guides &amp; tools</h4><ul>
+        <li><a href="../tools/movie-night-picker.html">Movie night picker</a></li>
+        <li><a href="../tools/movie-roulette.html">Movie roulette</a></li>
+        <li><a href="../compare/letterboxd-vs-kuvacult.html">Letterboxd vs Kuvacult</a></li>
+        <li><a href="../blog/how-to-make-a-shared-watchlist-on-letterboxd.html">Shared watchlists on Letterboxd</a></li>
+        <li><a href="../blog/how-to-watch-movies-together-online.html">Watch movies together online</a></li>
+        <li><a href="../blog/how-to-host-a-discord-movie-night.html">Discord movie night</a></li>
+        <li><a href="../blog/movie-night-ideas-for-couples.html">Movie night ideas for couples</a></li>
+        <li><a href="../blog/31-days-of-horror.html">31 days of horror</a></li>
+        <li><a href="../blog/where-does-rogue-one-fit-in-the-star-wars-timeline.html">Where does Rogue One fit?</a></li>
+        <li><a href="../blog/where-does-venom-fit-in-the-mcu.html">Where does Venom fit in the MCU?</a></li>
+        <li><a href="../blog/breaking-bad-watch-order-remembering-rj-mitte.html">Breaking Bad watch order</a></li>
+        <li><a href="../blog/index.html">Blog</a></li>
+      </ul></div>
+      <div><h4>Help</h4><ul>
+        <li><a href="../faq.html">FAQ</a></li>
+        <li><a href="../status.html">Server status</a></li>
+        <li><a href="../team.html">Meet the team</a></li>
+        <li><a href="mailto:kuvacult@gmail.com?subject=Kuvacult%20bug%20report">Report a bug</a></li>
+        <li><a href="mailto:kuvacult@gmail.com">Contact</a></li>
+        <li><a href="../privacy.html">Privacy policy</a></li>
+        <li><a href="../terms.html">Terms of service</a></li>
+      </ul></div>
+    </div>
+    <div class="foot-base"><span>© 2026 Kuvacult · made by @Ydlm88 · art by @Solarbuggg</span><span>Not affiliated with Letterboxd or any film studio.</span></div>
+  </div>
+</footer>
+<dialog class="lb" id="lb" aria-label="Screenshot"><button class="lb-x" aria-label="Close">×</button><div class="lb-scroll"><img id="lb-img" alt=""></div></dialog>
+<script src="../site.js"></script>
+</body>
+</html>
